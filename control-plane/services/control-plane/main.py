@@ -12,16 +12,18 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
-import httpx
 from cryptography.fernet import Fernet
-from fastapi import FastAPI, HTTPException, Depends, Query, BackgroundTasks, Request, Response
+from fastapi import FastAPI, HTTPException, Depends, Query, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import StreamingResponse, RedirectResponse
+from starlette.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -95,19 +97,6 @@ class Secret(Base):
     rotation_days = Column(Integer, default=90)
     # Per-agent scoping: NULL = global (applies to all agents)
     agent_id = Column(String(100), nullable=True, index=True)
-
-
-class Container(Base):
-    __tablename__ = "containers"
-
-    id = Column(Integer, primary_key=True, index=True)
-    container_id = Column(String(100), unique=True, index=True)
-    name = Column(String(100))
-    status = Column(String(20))
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_seen = Column(DateTime)
-    image = Column(String(200))
-    config = Column(Text)  # JSON
 
 
 class RateLimit(Base):
@@ -577,9 +566,34 @@ def get_tenant_agent_ids(db: Session, tenant_id: int) -> List[str]:
 # Application
 # =============================================================================
 
+# -----------------------------------------------------------------------------
+# Rate Limiting Setup (Redis-backed for horizontal scaling)
+# -----------------------------------------------------------------------------
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379')
+
+
+def get_token_identifier(request: Request) -> str:
+    """Rate limit by API token (not IP) for meaningful limiting."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        # Use first 16 chars of token as identifier (enough to be unique)
+        return f"token:{auth[7:23]}"
+    # Fall back to IP for unauthenticated requests
+    return f"ip:{get_remote_address(request)}"
+
+
+# Initialize limiter with Redis storage
+limiter = Limiter(
+    key_func=get_token_identifier,
+    storage_uri=REDIS_URL,
+    strategy="fixed-window",  # or "moving-window" for stricter limiting
+)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting AI Devbox Control Plane")
+    logger.info(f"Rate limiting enabled with Redis: {REDIS_URL}")
     yield
     logger.info("Shutting down")
 
@@ -593,6 +607,10 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# Register rate limiter with app
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -674,30 +692,6 @@ async def get_audit_logs(
     return query.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limit).all()
 
 
-@app.post("/api/v1/audit-logs")
-async def create_audit_log(
-    event_type: str,
-    user: str,
-    action: str,
-    details: Optional[str] = None,
-    severity: str = "INFO",
-    container_id: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    """Create a new audit log entry (called by devbox containers)"""
-    log = AuditLog(
-        event_type=event_type,
-        user=user,
-        action=action,
-        details=details,
-        severity=severity,
-        container_id=container_id
-    )
-    db.add(log)
-    db.commit()
-    return {"status": "created", "id": log.id}
-
-
 # =============================================================================
 # Allowlist Management Endpoints
 # =============================================================================
@@ -731,7 +725,9 @@ async def get_allowlist(
 
 
 @app.post("/api/v1/allowlist", response_model=AllowlistEntryResponse)
+@limiter.limit("30/minute")  # Admin write operations
 async def add_allowlist_entry(
+    request: Request,
     entry: AllowlistEntryCreate,
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin)
@@ -780,6 +776,31 @@ async def delete_allowlist_entry(
     db.delete(entry)
     db.commit()
     return {"status": "deleted"}
+
+
+@app.patch("/api/v1/allowlist/{entry_id}", response_model=AllowlistEntryResponse)
+@limiter.limit("30/minute")
+async def update_allowlist_entry(
+    request: Request,
+    entry_id: int,
+    enabled: Optional[bool] = None,
+    description: Optional[str] = None,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin)
+):
+    """Update an allowlist entry (admin only)"""
+    entry = db.query(AllowlistEntry).filter(AllowlistEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    if enabled is not None:
+        entry.enabled = enabled
+    if description is not None:
+        entry.description = description
+
+    db.commit()
+    db.refresh(entry)
+    return entry
 
 
 @app.get("/api/v1/allowlist/export")
@@ -844,7 +865,9 @@ async def export_allowlist(
 # =============================================================================
 
 @app.get("/api/v1/secrets", response_model=List[SecretResponse])
+@limiter.limit("60/minute")  # Read operations
 async def get_secrets(
+    request: Request,
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin),
     agent_id: Optional[str] = None
@@ -893,7 +916,9 @@ async def get_secrets(
 
 
 @app.post("/api/v1/secrets")
+@limiter.limit("30/minute")  # Admin write operations
 async def create_secret(
+    request: Request,
     secret: SecretCreate,
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin)
@@ -1021,7 +1046,9 @@ def match_domain(pattern: str, domain: str) -> bool:
 
 
 @app.get("/api/v1/secrets/for-domain")
+@limiter.limit("120/minute")  # Envoy calls this frequently (cached 5min client-side)
 async def get_credential_for_domain(
+    request: Request,
     domain: str,
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(verify_token)
@@ -1195,7 +1222,9 @@ async def delete_rate_limit(
 
 
 @app.get("/api/v1/rate-limits/for-domain")
+@limiter.limit("120/minute")  # Envoy calls this frequently (cached 5min client-side)
 async def get_rate_limit_for_domain(
+    request: Request,
     domain: str,
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(verify_token)
@@ -1281,30 +1310,6 @@ async def list_agents(
 
 
 # =============================================================================
-# Container Management Endpoints
-# =============================================================================
-
-@app.get("/api/v1/containers")
-async def list_containers(
-    db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin)
-):
-    """List all managed containers (admin only)"""
-    return db.query(Container).all()
-
-
-@app.post("/api/v1/containers/{container_id}/wipe")
-async def wipe_container_session(
-    container_id: str,
-    wipe_level: str = "standard",
-    token_info: TokenInfo = Depends(require_admin)
-):
-    """Trigger session wipe on a container (admin only)"""
-    logger.info(f"Wiping container {container_id} with level {wipe_level}")
-    return {"status": "wipe_initiated", "container_id": container_id, "level": wipe_level}
-
-
-# =============================================================================
 # Agent Management Endpoints (Polling-based)
 # Agent-manager polls these endpoints, no inbound connection to data plane needed
 # =============================================================================
@@ -1333,7 +1338,9 @@ def get_or_create_agent_state(db: Session, agent_id: str = "default", tenant_id:
 
 
 @app.post("/api/v1/agent/heartbeat", response_model=AgentHeartbeatResponse)
+@limiter.limit("5/second")  # Agents poll every 30s, allow burst
 async def agent_heartbeat(
+    request: Request,
     heartbeat: AgentHeartbeat,
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(verify_token)
@@ -2022,47 +2029,6 @@ async def update_token(
         last_used_at=db_token.last_used_at,
         enabled=db_token.enabled
     )
-
-
-# =============================================================================
-# Proxy Endpoints - Single entry point for data plane
-# =============================================================================
-
-LOKI_URL = os.environ.get('LOKI_URL', 'http://loki:3100')
-
-
-@app.post("/proxy/loki/push")
-async def proxy_loki_push(request: Request):
-    """Proxy log push requests to Loki"""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{LOKI_URL}/loki/api/v1/push",
-            headers={k: v for k, v in request.headers.items() if k.lower() not in ['host', 'content-length']},
-            content=await request.body(),
-            timeout=30.0
-        )
-
-        return Response(
-            content=response.content,
-            status_code=response.status_code
-        )
-
-
-@app.get("/proxy/loki/query")
-async def proxy_loki_query(request: Request):
-    """Proxy log query requests to Loki"""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{LOKI_URL}/loki/api/v1/query",
-            params=request.query_params,
-            timeout=30.0
-        )
-
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            headers=dict(response.headers)
-        )
 
 
 # =============================================================================

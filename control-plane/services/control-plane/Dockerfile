@@ -14,7 +14,9 @@ RUN pip install --no-cache-dir \
     pydantic==2.5.3 \
     python-multipart==0.0.6 \
     psycopg2-binary==2.9.9 \
-    httpx==0.26.0
+    httpx==0.26.0 \
+    slowapi==0.1.9 \
+    redis==5.0.1
 
 # Copy application
 COPY main.py seed.py entrypoint.sh /app/

@@ -7,6 +7,24 @@ version: '3.8'
 
 services:
   # ===========================================================================
+  # Redis - Rate Limiting Store (for horizontal scaling)
+  # ===========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - control-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ===========================================================================
   # Control Plane API
   # ===========================================================================
   control-plane-api:
@@ -17,9 +35,8 @@ services:
 
     environment:
       - DATABASE_URL=postgresql://aidevbox:aidevbox@postgres:5432/control_plane
-      - LOKI_URL=http://loki:3100
+      - REDIS_URL=redis://redis:6379
       - API_TOKENS=${API_TOKENS:-dev-token,admin-token}
-      - COST_PER_HOUR=0.50
       # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
 
@@ -31,6 +48,8 @@ services:
 
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
     restart: unless-stopped
@@ -177,5 +196,6 @@ networks:
 # =============================================================================
 volumes:
   postgres-data:
+  redis-data:
   loki-data:
   grafana-data:

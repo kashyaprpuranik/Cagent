@@ -294,49 +294,48 @@ static_resources:
                         local rate_limit_cache = {}  -- domain -> {rpm, burst, expires_at}
                         local token_buckets = {}     -- domain -> {tokens, last_refill}
 
-                        -- Devbox.local to real domain mapping
-                        local devbox_domain_map = {}
-                        local domain_map_expires_at = 0
-
                         -- Control plane health tracking
                         local cp_available = true
                         local cp_last_failure = 0
 
                         -- =======================================================================
-                        -- Static Configuration (loaded from environment)
-                        -- Format: STATIC_DOMAIN_MAP="openai.devbox.local:api.openai.com,github.devbox.local:api.github.com"
-                        -- Format: STATIC_CREDENTIALS="api.openai.com:Authorization:Bearer sk-xxx"
+                        -- Static Configuration (loaded from environment, for standalone mode)
+                        -- Format: STATIC_CREDENTIALS="domain:header_name:header_value[:alias]"
+                        --   Example: api.openai.com:Authorization:Bearer sk-xxx:openai
+                        --   With alias, openai.devbox.local resolves to api.openai.com
                         -- Format: STATIC_RATE_LIMITS="api.openai.com:60:10,default:120:20"
                         -- =======================================================================
-                        local static_credentials = {}
+                        local static_credentials = {}  -- domain -> {header_name, header_value, target_domain}
+                        local static_alias_map = {}    -- alias.devbox.local -> domain
                         local static_rate_limits = {}
-                        local static_domain_map = {}
                         local static_config_loaded = false
 
                         function load_static_config(request_handle)
                           if static_config_loaded then return end
                           static_config_loaded = true
 
-                          -- Load static domain mappings
-                          local domain_map_env = os.getenv("STATIC_DOMAIN_MAP") or ""
-                          for mapping in string.gmatch(domain_map_env, "[^,]+") do
-                            local alias, domain = string.match(mapping, "([^:]+):(.+)")
-                            if alias and domain then
-                              static_domain_map[alias] = domain
-                              request_handle:logInfo("Static mapping: " .. alias .. " -> " .. domain)
-                            end
-                          end
-
-                          -- Load static credentials
+                          -- Load static credentials (format: domain:header_name:header_value[:alias])
                           local creds_env = os.getenv("STATIC_CREDENTIALS") or ""
                           for cred in string.gmatch(creds_env, "[^|]+") do
-                            local domain, header_name, header_value = string.match(cred, "([^:]+):([^:]+):(.+)")
+                            -- Try to match with optional alias (4 parts)
+                            local domain, header_name, header_value, alias = string.match(cred, "([^:]+):([^:]+):([^:]+):([^:]+)")
+                            if not domain then
+                              -- Fall back to 3-part format (no alias)
+                              domain, header_name, header_value = string.match(cred, "([^:]+):([^:]+):(.+)")
+                            end
                             if domain and header_name and header_value then
                               static_credentials[domain] = {
                                 header_name = header_name,
-                                header_value = header_value
+                                header_value = header_value,
+                                target_domain = domain
                               }
                               request_handle:logInfo("Static credential loaded for: " .. domain)
+                              -- If alias provided, map alias.devbox.local -> domain
+                              if alias then
+                                local alias_domain = alias .. ".devbox.local"
+                                static_alias_map[alias_domain] = domain
+                                request_handle:logInfo("Static alias: " .. alias_domain .. " -> " .. domain)
+                              end
                             end
                           end
 
@@ -388,73 +387,15 @@ static_resources:
                           cp_available = true
                         end
 
-                        -- Fetch domain mappings from control plane API
-                        function refresh_domain_mappings(request_handle)
-                          load_static_config(request_handle)
-
-                          local now = os.time()
-                          if now < domain_map_expires_at then
-                            return  -- Cache still valid
-                          end
-
-                          -- Merge static mappings first
-                          for alias, domain in pairs(static_domain_map) do
-                            devbox_domain_map[alias] = domain
-                          end
-
-                          if not should_contact_cp() then
-                            domain_map_expires_at = now + CACHE_TTL_SECONDS
-                            return
-                          end
-
-                          request_handle:logInfo("Fetching domain mappings from control plane")
-
-                          local headers, body = request_handle:httpCall(
-                            "control_plane_api",
-                            {
-                              [":method"] = "GET",
-                              [":path"] = "/api/v1/domain-mappings",
-                              [":authority"] = "control-plane-api",
-                              ["authorization"] = "Bearer " .. API_TOKEN
-                            },
-                            "",
-                            5000,
-                            false
-                          )
-
-                          if body and string.len(body) > 0 then
-                            mark_cp_success()
-                            -- Parse mappings from JSON response (CP overrides static)
-                            for alias, domain in string.gmatch(body, '"([^"]+%.devbox%.local)"%s*:%s*"([^"]+)"') do
-                              devbox_domain_map[alias] = domain
-                              request_handle:logInfo("CP mapping: " .. alias .. " -> " .. domain)
-                            end
-                          else
-                            mark_cp_failure()
-                            request_handle:logWarn("Control plane unavailable, using static config")
-                          end
-
-                          domain_map_expires_at = now + CACHE_TTL_SECONDS
+                        -- Check if host is a devbox.local alias
+                        function is_devbox_local(host)
+                          local host_clean = string.match(host, "^([^:]+)") or host
+                          return string.match(host_clean, "%.devbox%.local$") ~= nil
                         end
 
-                        -- Map devbox.local host to real domain for credential lookup
-                        function get_real_domain(request_handle, host)
-                          local host_clean = string.match(host, "^([^:]+)") or host
-
-                          -- Check if this looks like a devbox.local request
-                          if string.match(host_clean, "%.devbox%.local$") then
-                            -- Refresh mappings if needed
-                            refresh_domain_mappings(request_handle)
-
-                            local mapped = devbox_domain_map[host_clean]
-                            if mapped then
-                              return mapped, true  -- mapped domain, is_devbox_local
-                            end
-                            -- Unknown devbox.local alias - return as-is
-                            request_handle:logWarn("Unknown devbox.local alias: " .. host_clean)
-                          end
-
-                          return host_clean, false
+                        -- Clean host (remove port)
+                        function clean_host(host)
+                          return string.match(host, "^([^:]+)") or host
                         end
 
                         -- DNS Tunneling Detection
@@ -500,11 +441,13 @@ static_resources:
 
                           local header_name = string.match(body, '"header_name"%s*:%s*"([^"]+)"')
                           local header_value = string.match(body, '"header_value"%s*:%s*"([^"]+)"')
+                          local target_domain = string.match(body, '"target_domain"%s*:%s*"([^"]+)"')
 
                           if header_name and header_value then
                             return {
                               header_name = header_name,
-                              header_value = header_value
+                              header_value = header_value,
+                              target_domain = target_domain  -- Real domain for devbox.local aliases
                             }
                           end
 
@@ -568,13 +511,23 @@ static_resources:
 
                           -- Fall back to static credentials
                           if not cred then
-                            cred = static_credentials[host_clean]
+                            -- Check if this is a devbox.local alias
+                            local lookup_domain = static_alias_map[host_clean] or host_clean
+                            cred = static_credentials[lookup_domain]
+                            -- If found via alias, ensure target_domain is set
+                            if cred and static_alias_map[host_clean] then
+                              cred = {
+                                header_name = cred.header_name,
+                                header_value = cred.header_value,
+                                target_domain = lookup_domain
+                              }
+                            end
                             -- Try wildcard match (*.domain.com)
                             if not cred then
                               for pattern, static_cred in pairs(static_credentials) do
                                 if string.sub(pattern, 1, 2) == "*." then
                                   local suffix = string.sub(pattern, 2)  -- .domain.com
-                                  if string.sub(host_clean, -string.len(suffix)) == suffix then
+                                  if string.sub(lookup_domain, -string.len(suffix)) == suffix then
                                     cred = static_cred
                                     break
                                   end
@@ -702,16 +655,13 @@ static_resources:
 
                         function envoy_on_request(request_handle)
                           local host = request_handle:headers():get(":authority") or ""
+                          local host_clean = clean_host(host)
                           local credential_injected = "false"
                           local rate_limited = "false"
-                          local is_devbox_local = false
-
-                          -- Map devbox.local to real domain for credential/rate-limit lookup
-                          local real_domain
-                          real_domain, is_devbox_local = get_real_domain(request_handle, host)
+                          local devbox_local = is_devbox_local(host)
 
                           -- Skip DNS tunneling check for devbox.local (it's internal)
-                          if not is_devbox_local then
+                          if not devbox_local then
                             local is_suspicious, reason = detect_dns_tunneling(host)
                             if is_suspicious then
                               request_handle:logWarn("Potential DNS tunneling: " .. host .. " - " .. reason)
@@ -721,6 +671,14 @@ static_resources:
                               )
                               return
                             end
+                          end
+
+                          -- Credential lookup (handles both real domains and devbox.local aliases)
+                          -- For devbox.local aliases, CP returns target_domain with the real domain
+                          local cred = get_credential(request_handle, host_clean)
+                          local real_domain = host_clean
+                          if cred and cred.target_domain then
+                            real_domain = cred.target_domain
                           end
 
                           -- Rate limiting (use real domain for lookup)
@@ -734,8 +692,7 @@ static_resources:
                             return
                           end
 
-                          -- Credential injection (use real domain for lookup)
-                          local cred = get_credential(request_handle, real_domain)
+                          -- Credential injection
                           if cred and cred.header_name and cred.header_value then
                             request_handle:headers():remove(cred.header_name)
                             request_handle:headers():add(cred.header_name, cred.header_value)
@@ -752,7 +709,7 @@ static_resources:
                           request_handle:headers():add("X-Real-Domain", real_domain)
                           request_handle:headers():add("X-Devbox-Timestamp", os.date("!%Y-%m-%dT%H:%M:%SZ"))
 
-                          if is_devbox_local then
+                          if devbox_local then
                             request_handle:logInfo(string.format(
                               "Devbox proxy: %s -> %s (credential_injected=%s)",
                               host, real_domain, credential_injected

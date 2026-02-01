@@ -145,8 +145,6 @@ services:
       # Control plane authentication token (generate with: openssl rand -hex 32)
       - CONTROL_PLANE_TOKEN=${CONTROL_PLANE_TOKEN:-}
       # Static configuration (used as fallback or in standalone mode)
-      # Format: alias:domain,alias:domain
-      - STATIC_DOMAIN_MAP=${STATIC_DOMAIN_MAP:-}
       # Format: domain:header_name:header_value|domain:header_name:header_value
       - STATIC_CREDENTIALS=${STATIC_CREDENTIALS:-}
       # Format: domain:rpm:burst,domain:rpm:burst

@@ -17,6 +17,7 @@ export interface Secret {
   id: number;
   name: string;
   domain_pattern?: string;
+  alias?: string;  // e.g., "openai" -> openai.devbox.local
   header_name?: string;
   header_format?: string;
   description?: string;
@@ -31,6 +32,7 @@ export interface CreateSecretRequest {
   name: string;
   value: string;
   domain_pattern: string;
+  alias?: string;  // e.g., "openai" -> openai.devbox.local
   header_name?: string;
   header_format?: string;
   description?: string;

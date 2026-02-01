@@ -485,6 +485,8 @@ pytest tests/test_e2e.py -v
 
 ## TODO
 
+- [ ] Move audit logs from Postgres to Loki (reduce DB load, leverage retention policies)
+- [ ] Add rate limiting to CP API endpoints (prevent audit log blowup from DoS)
 - [ ] TLS between data plane and control plane
 - [ ] mTLS for DP→CP communication
 - [x] Multi-data plane support (multiple agents per control plane)

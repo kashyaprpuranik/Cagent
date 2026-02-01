@@ -28,6 +28,7 @@ export function Secrets() {
   const [newHeaderFormat, setNewHeaderFormat] = useState('Bearer {value}');
   const [newDescription, setNewDescription] = useState('');
   const [newAgentId, setNewAgentId] = useState('');
+  const [newAlias, setNewAlias] = useState('');
   const [rotateValue, setRotateValue] = useState('');
 
   // Build agent options for the Select dropdown
@@ -45,6 +46,7 @@ export function Secrets() {
         name: newName,
         value: newValue,
         domain_pattern: newDomainPattern,
+        alias: newAlias || undefined,
         header_name: newHeaderName,
         header_format: newHeaderFormat,
         description: newDescription || undefined,
@@ -54,6 +56,7 @@ export function Secrets() {
       setNewName('');
       setNewValue('');
       setNewDomainPattern('');
+      setNewAlias('');
       setNewHeaderName('Authorization');
       setNewHeaderFormat('Bearer {value}');
       setNewDescription('');
@@ -110,7 +113,12 @@ export function Secrets() {
       key: 'domain_pattern',
       header: 'Domain',
       render: (secret: Secret) => (
-        <code className="text-sm text-blue-400">{secret.domain_pattern || '-'}</code>
+        <div>
+          <code className="text-sm text-blue-400">{secret.domain_pattern || '-'}</code>
+          {secret.alias && (
+            <p className="text-xs text-dark-500">{secret.alias}.devbox.local</p>
+          )}
+        </div>
       ),
     },
     {
@@ -229,6 +237,15 @@ export function Secrets() {
             value={newDomainPattern}
             onChange={(e) => setNewDomainPattern(e.target.value)}
           />
+          <Input
+            label="Alias (optional)"
+            placeholder="openai"
+            value={newAlias}
+            onChange={(e) => setNewAlias(e.target.value)}
+          />
+          <p className="text-xs text-dark-500">
+            Alias creates a shortcut: <code className="text-blue-400">{newAlias || 'alias'}.devbox.local</code> → {newDomainPattern || 'domain'}
+          </p>
           <div className="grid grid-cols-2 gap-4">
             <Input
               label="Header Name"
@@ -259,6 +276,7 @@ export function Secrets() {
             The credential will be injected as the specified header when requests match the domain pattern.
             Use {'{value}'} in the header format to insert the secret value.
             Select an agent to scope this secret to that agent only, or leave as "Global" to apply to all agents.
+            If an alias is set, agents can use <code className="text-blue-400">alias.devbox.local</code> instead of the real domain.
           </p>
           <div className="flex justify-end gap-2 pt-4">
             <Button variant="secondary" onClick={() => setCreateModal(false)}>

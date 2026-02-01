@@ -5,55 +5,56 @@ Secure development environment for AI agents with isolated networking and centra
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         CONTROL PLANE (control-net)                          │
-│                         (runs on provider/cloud)                             │
-│                                                                              │
-│  ┌───────────┐  ┌─────────────┐  ┌───────────┐  ┌───────────┐              │
-│  │ Postgres  │  │  Admin UI   │  │   Loki    │  │  Grafana  │              │
-│  │ (secrets) │  │   (:9080)   │  │  (:3100)  │  │  (:3000)  │              │
-│  └─────┬─────┘  └──────┬──────┘  └─────┬─────┘  └─────┬─────┘              │
-│        │               │               │              │                     │
-│        │               │               │              │                     │
-│        ▼               ▼               │              │                     │
-│  ┌────────────────────────────────┐    │              │                     │
-│  │     Control Plane API (:8002)  │    │              │                     │
-│  │                                │    │              │                     │
-│  │  /api/v1/secrets    Secrets    │    │              │                     │
-│  │  /api/v1/allowlist  Allowlist  │    │              │                     │
-│  │  /api/v1/agents     Agent Mgmt │    │              │                     │
-│  │  /api/v1/rate-limits Rate Limits│   │              │                     │
-│  └────────────────────────────────┘    │              │                     │
-│                 ▲                      │              │                     │
-└─────────────────┼──────────────────────┼──────────────┼─────────────────────┘
-                  │                      │              │
-                  │ Heartbeat/Commands   │ Logs        │ Dashboards
-                  │                      │              │
-┌─────────────────┼──────────────────────┼──────────────┼─────────────────────┐
-│                 │         DATA PLANE   │              │                     │
-│                 │    (runs on client)  │              │                     │
-│                 │                      │              │                     │
-│  ┌──────────────┴───────────┐  ┌───────┴──────┐       │                     │
-│  │      Agent Manager       │  │  Fluent-Bit  │───────┘                     │
-│  │  (polls CP, syncs DNS)   │  │   (logs)     │                             │
-│  └──────────────────────────┘  └──────────────┘                             │
-│                                                                              │
-│  ┌────────────────────────────────────────────────────────────────────────┐ │
-│  │                        agent-net (isolated)                            │ │
-│  │  ┌──────────────────────────────────────────────────────────────────┐ │ │
-│  │  │                     Agent Container                               │ │ │
-│  │  │  • Isolated network (no direct internet access)                  │ │ │
-│  │  │  • All HTTP(S) via Envoy proxy                                   │ │ │
-│  │  │  • DNS via CoreDNS filter (allowlist enforced)                   │ │ │
-│  │  └──────────────────────────────────────────────────────────────────┘ │ │
-│  │              │                           │                             │ │
-│  │              ▼                           ▼                             │ │
-│  │       ┌─────────────┐             ┌─────────────┐                     │ │
-│  │       │   Envoy     │             │   CoreDNS   │                     │ │
-│  │       │  (+ creds)  │             │  (filter)   │                     │ │
-│  │       └─────────────┘             └─────────────┘                     │ │
-│  └────────────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           CONTROL PLANE (control-net)                            │
+│                           (runs on provider/cloud)                               │
+│                                                                                  │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────┐ │
+│  │ Postgres  │  │ Admin UI  │  │   Loki    │  │  Grafana  │  │  FRP Server   │ │
+│  │ (secrets) │  │  (:9080)  │  │  (:3100)  │  │  (:3000)  │  │ (:7000,:6000+)│ │
+│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └───────┬───────┘ │
+│        │              │              │              │                 │         │
+│        ▼              ▼              │              │                 │         │
+│  ┌────────────────────────────────┐  │              │                 │         │
+│  │     Control Plane API (:8002)  │  │              │                 │         │
+│  │                                │  │              │                 │         │
+│  │  /api/v1/secrets    Secrets    │  │              │                 │         │
+│  │  /api/v1/allowlist  Allowlist  │  │              │                 │         │
+│  │  /api/v1/agents     Agent Mgmt │  │              │                 │         │
+│  │  /api/v1/rate-limits Rate Limits│ │              │                 │         │
+│  └────────────────────────────────┘  │              │                 │         │
+│                 ▲                     │              │                 │         │
+└─────────────────┼─────────────────────┼──────────────┼─────────────────┼─────────┘
+                  │                     │              │                 │
+                  │ Heartbeat/Commands  │ Logs         │ Dashboards      │ SSH Tunnels
+                  │                     │              │                 │
+┌─────────────────┼─────────────────────┼──────────────┼─────────────────┼─────────┐
+│                 │          DATA PLANE │              │                 │         │
+│                 │     (runs on client)│              │                 │         │
+│                 │                     │              │                 ▼         │
+│  ┌──────────────┴───────────┐  ┌──────┴───────┐            ┌─────────────────┐  │
+│  │      Agent Manager       │  │  Fluent-Bit  │────────┘   │   FRP Client    │  │
+│  │  (polls CP, syncs DNS)   │  │   (logs)     │            │ (connects to CP)│  │
+│  └──────────────────────────┘  └──────────────┘            └────────┬────────┘  │
+│                                                                      │          │
+│  ┌───────────────────────────────────────────────────────────────────┼────────┐ │
+│  │                        agent-net (isolated)                       │        │ │
+│  │  ┌────────────────────────────────────────────────────────────────┼──────┐ │ │
+│  │  │                     Agent Container                            │      │ │ │
+│  │  │  • Isolated network (no direct internet access)                │      │ │ │
+│  │  │  • All HTTP(S) via Envoy proxy                              SSH:22    │ │ │
+│  │  │  • DNS via CoreDNS filter (allowlist enforced)                 │      │ │ │
+│  │  └────────────────────────────────────────────────────────────────┼──────┘ │ │
+│  │              │                           │                        │        │ │
+│  │              ▼                           ▼                        │        │ │
+│  │       ┌─────────────┐             ┌─────────────┐                 │        │ │
+│  │       │   Envoy     │             │   CoreDNS   │                 │        │ │
+│  │       │  (+ creds)  │             │  (filter)   │                 │        │ │
+│  │       └─────────────┘             └─────────────┘                 │        │ │
+│  └───────────────────────────────────────────────────────────────────┼────────┘ │
+└──────────────────────────────────────────────────────────────────────┼──────────┘
+                                                                       │
+                                                            User SSH ──┘
 ```
 
 ## Security Model
@@ -491,7 +492,7 @@ pytest tests/test_e2e.py -v
 - [x] Agent registration (approve/reject new agents, revoke access)
 - [x] API token management (generate, delete, enable/disable tokens via UI)
 - [x] Per-agent configuration (different allowlists/secrets/rate-limits per agent)
-- [ ] Multi-tenancy (isolated tenant workspaces)
+- [x] Multi-tenancy (isolated tenant workspaces)
 - [ ] Package registry proxy/allowlist
 
 ## License

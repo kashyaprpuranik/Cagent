@@ -183,11 +183,9 @@ services:
       - ./configs/frps/frps.toml:/etc/frp/frps.toml:ro
 
     ports:
-      - "7000:7000"       # FRP control port (agents connect here)
+      - "7000:7000"       # FRP control port (agents connect here via STCP)
       - "7500:7500"       # FRP dashboard
-      # SSH tunnel ports - add more as needed (one per agent)
-      # For many agents, consider using STCP mode instead
-      - "6000-6009:6000-6009"  # SSH tunnels for up to 10 agents
+      # STCP mode: No SSH tunnel ports needed - P2P tunneling through control port
 
     networks:
       - control-net

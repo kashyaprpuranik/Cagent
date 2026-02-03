@@ -6,6 +6,7 @@ interface AuthUser {
   agent_id: string | null;
   tenant_id: number | null;
   is_super_admin: boolean;
+  roles: string[];
 }
 
 interface AuthContextType {

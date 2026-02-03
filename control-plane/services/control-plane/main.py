@@ -8,15 +8,18 @@ import json
 import logging
 import hashlib
 import secrets
+import asyncio
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
 from cryptography.fernet import Fernet
-from fastapi import FastAPI, HTTPException, Depends, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Depends, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import RedirectResponse
+from starlette.websockets import WebSocketState
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
@@ -146,6 +149,25 @@ class AgentState(Base):
     last_command_result = Column(String(20))  # success, failed
     last_command_message = Column(Text)
     last_command_at = Column(DateTime)
+    # STCP configuration for P2P SSH tunneling
+    stcp_secret_key = Column(String(256), nullable=True)  # Encrypted STCP secret
+
+
+class TerminalSession(Base):
+    """Audit log for terminal sessions."""
+    __tablename__ = "terminal_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(36), unique=True, index=True)  # UUID
+    agent_id = Column(String(100), index=True)
+    user = Column(String(100), index=True)  # Token name
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    ended_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
+    bytes_sent = Column(Integer, default=0)
+    bytes_received = Column(Integer, default=0)
+    client_ip = Column(String(45))  # IPv4 or IPv6
 
 
 class ApiToken(Base):
@@ -161,6 +183,9 @@ class ApiToken(Base):
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
     tenant = relationship("Tenant", back_populates="tokens")
     is_super_admin = Column(Boolean, default=False)  # Can access all tenants
+    # RBAC: comma-separated roles (e.g., "admin,developer")
+    # Roles: admin (full access), developer (read + terminal access)
+    roles = Column(String(200), default="admin")
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
@@ -264,6 +289,7 @@ class ApiTokenCreate(BaseModel):
     agent_id: Optional[str] = None  # Required if token_type is "agent"
     tenant_id: Optional[int] = None  # Required for admin tokens (not super_admin)
     is_super_admin: bool = False  # Super admin can access all tenants
+    roles: Optional[str] = "admin"  # Comma-separated roles: "admin", "developer", "admin,developer"
     expires_in_days: Optional[int] = None  # Optional expiry
 
 
@@ -275,6 +301,7 @@ class ApiTokenResponse(BaseModel):
     agent_id: Optional[str]
     tenant_id: Optional[int]
     is_super_admin: bool
+    roles: Optional[str] = "admin"  # Comma-separated roles
     created_at: datetime
     expires_at: Optional[datetime]
     last_used_at: Optional[datetime]
@@ -292,6 +319,7 @@ class ApiTokenCreatedResponse(BaseModel):
     agent_id: Optional[str]
     tenant_id: Optional[int]
     is_super_admin: bool
+    roles: str  # Comma-separated roles
     token: str  # The actual token - only shown once!
     expires_at: Optional[datetime]
 
@@ -391,6 +419,36 @@ class AgentCommandRequest(BaseModel):
     wipe_workspace: bool = False  # Only used for wipe command
 
 
+class STCPSecretResponse(BaseModel):
+    """Response when generating STCP secret."""
+    agent_id: str
+    secret_key: str  # Only returned once on generation
+    message: str
+
+
+class STCPVisitorConfig(BaseModel):
+    """Configuration for STCP visitor (used to connect to agent SSH)."""
+    server_addr: str
+    server_port: int
+    proxy_name: str  # "{agent_id}-ssh"
+    secret_key: str
+
+
+class TerminalSessionResponse(BaseModel):
+    """Terminal session info for audit logs."""
+    session_id: str
+    agent_id: str
+    user: str
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    duration_seconds: Optional[int] = None
+    bytes_sent: int
+    bytes_received: int
+
+    class Config:
+        from_attributes = True
+
+
 # =============================================================================
 # Dependencies
 # =============================================================================
@@ -440,13 +498,19 @@ class TokenInfo:
         agent_id: Optional[str] = None,
         token_name: str = "",
         tenant_id: Optional[int] = None,
-        is_super_admin: bool = False
+        is_super_admin: bool = False,
+        roles: List[str] = None
     ):
         self.token_type = token_type  # "admin" or "agent"
         self.agent_id = agent_id  # For agent tokens, the associated agent_id
         self.token_name = token_name
         self.tenant_id = tenant_id  # Tenant this token belongs to
         self.is_super_admin = is_super_admin  # Can access all tenants
+        self.roles = roles or ["admin"]  # Default to admin for backwards compat
+
+    def has_role(self, role: str) -> bool:
+        """Check if token has a specific role."""
+        return role in self.roles or self.is_super_admin
 
 
 async def verify_token(
@@ -486,18 +550,22 @@ async def verify_token(
             if agent:
                 tenant_id = agent.tenant_id
 
+        # Parse roles (comma-separated string to list)
+        roles = (db_token.roles or "admin").split(",")
+
         return TokenInfo(
             token_type=db_token.token_type,
             agent_id=db_token.agent_id,
             token_name=db_token.name,
             tenant_id=tenant_id,
-            is_super_admin=db_token.is_super_admin or False
+            is_super_admin=db_token.is_super_admin or False,
+            roles=roles
         )
 
     # Fallback to legacy env var tokens (treated as super admin for backwards compat)
     legacy_tokens = os.environ.get('API_TOKENS', 'dev-token').split(',')
     if token in legacy_tokens:
-        return TokenInfo(token_type="admin", token_name="legacy", is_super_admin=True)
+        return TokenInfo(token_type="admin", token_name="legacy", is_super_admin=True, roles=["admin", "developer"])
 
     raise HTTPException(status_code=403, detail="Invalid token")
 
@@ -528,6 +596,41 @@ async def require_super_admin(token_info: TokenInfo = Depends(verify_token)) -> 
         raise HTTPException(
             status_code=403,
             detail="Super admin token required for this operation"
+        )
+    return token_info
+
+
+def require_role(role: str):
+    """Factory for role-based dependency.
+
+    Usage: Depends(require_role("admin")) or Depends(require_role("developer"))
+    """
+    async def dependency(token_info: TokenInfo = Depends(verify_token)) -> TokenInfo:
+        if not token_info.has_role(role):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Role '{role}' required for this operation"
+            )
+        return token_info
+    return dependency
+
+
+async def require_admin_role(token_info: TokenInfo = Depends(verify_token)) -> TokenInfo:
+    """Require admin role for management operations (allowlist, secrets, rate limits)."""
+    if not token_info.has_role("admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Admin role required for this operation"
+        )
+    return token_info
+
+
+async def require_developer_role(token_info: TokenInfo = Depends(verify_token)) -> TokenInfo:
+    """Require developer role for development operations (terminal, logs view)."""
+    if not token_info.has_role("developer"):
+        raise HTTPException(
+            status_code=403,
+            detail="Developer role required for this operation"
         )
     return token_info
 
@@ -591,6 +694,54 @@ limiter = Limiter(
 )
 
 
+def seed_tokens(db: Session):
+    """Seed default tokens for development/testing.
+
+    Creates:
+    - admin-token: Admin role (full access to allowlist, secrets, etc.)
+    - dev-token: Developer role (read access, terminal access)
+
+    These are only created if they don't already exist. The actual token
+    values are deterministic for easy testing but should be replaced in production.
+    """
+    # Check if we should seed (controlled by env var)
+    if os.environ.get('SEED_TOKENS', 'true').lower() != 'true':
+        return
+
+    # Well-known test tokens (deterministic for testing)
+    test_tokens = [
+        {
+            "name": "admin-token",
+            "raw_token": "admin-test-token-do-not-use-in-production",
+            "token_type": "admin",
+            "roles": "admin",
+            "is_super_admin": True,
+        },
+        {
+            "name": "dev-token",
+            "raw_token": "dev-test-token-do-not-use-in-production",
+            "token_type": "admin",
+            "roles": "developer",
+            "is_super_admin": False,
+        },
+    ]
+
+    for token_def in test_tokens:
+        existing = db.query(ApiToken).filter(ApiToken.name == token_def["name"]).first()
+        if not existing:
+            db_token = ApiToken(
+                name=token_def["name"],
+                token_hash=hash_token(token_def["raw_token"]),
+                token_type=token_def["token_type"],
+                roles=token_def["roles"],
+                is_super_admin=token_def["is_super_admin"],
+            )
+            db.add(db_token)
+            logger.info(f"Seeded token: {token_def['name']} (roles: {token_def['roles']})")
+
+    db.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting AI Devbox Control Plane")
@@ -598,6 +749,14 @@ async def lifespan(app: FastAPI):
         logger.info(f"Rate limiting enabled with Redis: {REDIS_URL}")
     else:
         logger.info("Rate limiting enabled with in-memory storage (single instance only)")
+
+    # Seed default tokens for development/testing
+    db = SessionLocal()
+    try:
+        seed_tokens(db)
+    finally:
+        db.close()
+
     yield
     logger.info("Shutting down")
 
@@ -661,7 +820,8 @@ async def get_current_user(token_info: TokenInfo = Depends(verify_token)):
         "token_type": token_info.token_type,
         "agent_id": token_info.agent_id,
         "tenant_id": token_info.tenant_id,
-        "is_super_admin": token_info.is_super_admin
+        "is_super_admin": token_info.is_super_admin,
+        "roles": token_info.roles
     }
 
 
@@ -1771,6 +1931,304 @@ async def revoke_agent(
 
 
 # =============================================================================
+# STCP Configuration Endpoints
+# =============================================================================
+
+@app.post("/api/v1/agents/{agent_id}/stcp-secret", response_model=STCPSecretResponse)
+async def generate_stcp_secret(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin)
+):
+    """Generate a new STCP secret for an agent (admin only).
+
+    This secret is used by:
+    1. FRP client on data plane (in STCP_SECRET_KEY env var)
+    2. STCP visitor on control plane (for terminal access)
+
+    The secret is returned only once - save it securely!
+    """
+    verify_agent_access(token_info, agent_id, db)
+
+    state = db.query(AgentState).filter(
+        AgentState.agent_id == agent_id,
+        AgentState.deleted_at.is_(None)
+    ).first()
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+
+    # Generate cryptographically secure secret
+    secret = secrets.token_urlsafe(32)
+    state.stcp_secret_key = encrypt_secret(secret)
+    db.commit()
+
+    # Log the action
+    log = AuditLog(
+        event_type="stcp_secret_generated",
+        user=token_info.token_name or "admin",
+        action=f"STCP secret generated for agent {agent_id}",
+        severity="INFO"
+    )
+    db.add(log)
+    db.commit()
+
+    return STCPSecretResponse(
+        agent_id=agent_id,
+        secret_key=secret,  # Only returned once!
+        message="Save this secret - it will not be shown again. Use it as STCP_SECRET_KEY in data plane .env"
+    )
+
+
+@app.get("/api/v1/agents/{agent_id}/stcp-config", response_model=STCPVisitorConfig)
+async def get_stcp_visitor_config(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_developer_role)
+):
+    """Get STCP visitor configuration for terminal access (developer role).
+
+    Used by the WebSocket terminal handler to establish SSH connection.
+    """
+    verify_agent_access(token_info, agent_id, db)
+
+    state = db.query(AgentState).filter(
+        AgentState.agent_id == agent_id,
+        AgentState.deleted_at.is_(None),
+        AgentState.approved == True
+    ).first()
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found or not approved")
+
+    if not state.stcp_secret_key:
+        raise HTTPException(status_code=404, detail="STCP not configured for this agent. Generate a secret first.")
+
+    return STCPVisitorConfig(
+        server_addr=os.environ.get("FRP_SERVER_ADDR", "frps"),
+        server_port=7000,
+        proxy_name=f"{agent_id}-ssh",
+        secret_key=decrypt_secret(state.stcp_secret_key)
+    )
+
+
+# =============================================================================
+# Web Terminal Endpoints (WebSocket)
+# =============================================================================
+
+@app.websocket("/api/v1/terminal/{agent_id}/ws")
+async def terminal_websocket(
+    websocket: WebSocket,
+    agent_id: str
+):
+    """WebSocket endpoint for terminal access to an agent.
+
+    Authentication:
+    - Token passed as query param: ?token=xxx
+    - Requires developer role
+
+    Messages:
+    - Binary: Terminal data (stdin/stdout)
+    - Text JSON: Control messages (resize, ping)
+
+    Note: This is a simplified implementation. For production, implement
+    proper SSH connection via paramiko with STCP visitor subprocess.
+    """
+    # Get database session
+    db = SessionLocal()
+
+    try:
+        # Accept connection first
+        await websocket.accept()
+
+        # Authenticate via query param
+        token = websocket.query_params.get("token")
+        if not token:
+            await websocket.close(code=4001, reason="Authentication required - pass token as query param")
+            return
+
+        # Verify token
+        token_hash_value = hash_token(token)
+        db_token = db.query(ApiToken).filter(
+            ApiToken.token_hash == token_hash_value,
+            ApiToken.enabled == True
+        ).first()
+
+        if not db_token:
+            await websocket.close(code=4003, reason="Invalid token")
+            return
+
+        # Check expiry
+        if db_token.expires_at and db_token.expires_at < datetime.utcnow():
+            await websocket.close(code=4003, reason="Token expired")
+            return
+
+        # Check developer role
+        roles = (db_token.roles or "").split(",")
+        if "developer" not in roles and not db_token.is_super_admin:
+            await websocket.close(code=4003, reason="Developer role required")
+            return
+
+        # Check agent access (multi-tenancy)
+        if not db_token.is_super_admin:
+            if db_token.token_type == "agent" and db_token.agent_id != agent_id:
+                await websocket.close(code=4003, reason="Access denied to this agent")
+                return
+            if db_token.tenant_id:
+                agent = db.query(AgentState).filter(AgentState.agent_id == agent_id).first()
+                if agent and agent.tenant_id != db_token.tenant_id:
+                    await websocket.close(code=4003, reason="Agent belongs to different tenant")
+                    return
+
+        # Get agent state
+        agent = db.query(AgentState).filter(
+            AgentState.agent_id == agent_id,
+            AgentState.deleted_at.is_(None),
+            AgentState.approved == True
+        ).first()
+
+        if not agent:
+            await websocket.close(code=4004, reason="Agent not found or not approved")
+            return
+
+        if not agent.stcp_secret_key:
+            await websocket.close(code=4004, reason="STCP not configured for agent")
+            return
+
+        # Check if agent is online
+        if not agent.last_heartbeat or (datetime.utcnow() - agent.last_heartbeat).total_seconds() > 60:
+            await websocket.close(code=4004, reason="Agent is offline")
+            return
+
+        # Get client IP
+        client_ip = websocket.client.host if websocket.client else "unknown"
+
+        # Create terminal session record
+        session_id = str(uuid.uuid4())
+        session_record = TerminalSession(
+            session_id=session_id,
+            agent_id=agent_id,
+            user=db_token.name,
+            tenant_id=db_token.tenant_id,
+            client_ip=client_ip
+        )
+        db.add(session_record)
+
+        # Audit log
+        log = AuditLog(
+            event_type="terminal_session_start",
+            user=db_token.name,
+            container_id=agent_id,
+            action=f"Terminal session started for agent {agent_id}",
+            details=json.dumps({"session_id": session_id, "client_ip": client_ip}),
+            severity="INFO"
+        )
+        db.add(log)
+        db.commit()
+
+        started_at = datetime.utcnow()
+        bytes_sent = 0
+        bytes_received = 0
+
+        # Send welcome message
+        await websocket.send_text(json.dumps({
+            "type": "connected",
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "message": "Connected to agent terminal"
+        }))
+
+        # Terminal relay loop
+        # NOTE: For full SSH implementation, use paramiko here
+        # This simplified version echoes commands (placeholder for real SSH)
+        try:
+            while True:
+                data = await websocket.receive()
+
+                if "text" in data:
+                    msg = json.loads(data["text"])
+                    if msg.get("type") == "resize":
+                        # Handle terminal resize
+                        cols = msg.get("cols", 80)
+                        rows = msg.get("rows", 24)
+                        logger.debug(f"Terminal resize: {cols}x{rows}")
+                    elif msg.get("type") == "ping":
+                        await websocket.send_text(json.dumps({"type": "pong"}))
+
+                elif "bytes" in data:
+                    # Forward to SSH (placeholder - echo for now)
+                    bytes_sent += len(data["bytes"])
+                    # In real implementation: ssh_channel.send(data["bytes"])
+                    # For now, echo back
+                    response = data["bytes"]
+                    bytes_received += len(response)
+                    await websocket.send_bytes(response)
+
+        except WebSocketDisconnect:
+            logger.info(f"Terminal session {session_id} disconnected")
+
+    except Exception as e:
+        logger.error(f"Terminal error: {e}")
+        if websocket.client_state == WebSocketState.CONNECTED:
+            await websocket.close(code=4005, reason=str(e))
+
+    finally:
+        # Update session record
+        ended_at = datetime.utcnow()
+        duration = int((ended_at - started_at).total_seconds()) if 'started_at' in locals() else 0
+
+        if 'session_id' in locals():
+            session = db.query(TerminalSession).filter(
+                TerminalSession.session_id == session_id
+            ).first()
+            if session:
+                session.ended_at = ended_at
+                session.duration_seconds = duration
+                session.bytes_sent = bytes_sent if 'bytes_sent' in locals() else 0
+                session.bytes_received = bytes_received if 'bytes_received' in locals() else 0
+
+            # Audit log
+            log = AuditLog(
+                event_type="terminal_session_end",
+                user=db_token.name if 'db_token' in locals() else "unknown",
+                container_id=agent_id,
+                action=f"Terminal session ended for agent {agent_id}",
+                details=json.dumps({
+                    "session_id": session_id,
+                    "duration_seconds": duration,
+                    "bytes_sent": bytes_sent if 'bytes_sent' in locals() else 0,
+                    "bytes_received": bytes_received if 'bytes_received' in locals() else 0
+                }),
+                severity="INFO"
+            )
+            db.add(log)
+            db.commit()
+
+        db.close()
+
+
+@app.get("/api/v1/terminal/sessions", response_model=List[TerminalSessionResponse])
+async def list_terminal_sessions(
+    agent_id: Optional[str] = None,
+    limit: int = Query(default=50, le=200),
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_admin)
+):
+    """List terminal sessions (admin only).
+
+    Filter by agent_id to see sessions for a specific agent.
+    """
+    query = db.query(TerminalSession).order_by(TerminalSession.started_at.desc())
+
+    if agent_id:
+        query = query.filter(TerminalSession.agent_id == agent_id)
+
+    # Tenant isolation
+    if not token_info.is_super_admin and token_info.tenant_id:
+        query = query.filter(TerminalSession.tenant_id == token_info.tenant_id)
+
+    return query.limit(limit).all()
+
+
+# =============================================================================
 # Tenant Management Endpoints (Super Admin Only)
 # =============================================================================
 
@@ -1959,6 +2417,7 @@ async def list_tokens(
         agent_id=t.agent_id,
         tenant_id=t.tenant_id,
         is_super_admin=t.is_super_admin or False,
+        roles=t.roles or "admin",
         created_at=t.created_at,
         expires_at=t.expires_at,
         last_used_at=t.last_used_at,
@@ -2033,6 +2492,17 @@ async def create_token(
     if request.expires_in_days:
         expires_at = datetime.utcnow() + timedelta(days=request.expires_in_days)
 
+    # Validate roles
+    valid_roles = {"admin", "developer"}
+    requested_roles = set(r.strip() for r in (request.roles or "admin").split(","))
+    invalid_roles = requested_roles - valid_roles
+    if invalid_roles:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid roles: {invalid_roles}. Valid roles are: {valid_roles}"
+        )
+    roles_str = ",".join(sorted(requested_roles))
+
     # Create token record
     db_token = ApiToken(
         name=request.name,
@@ -2041,6 +2511,7 @@ async def create_token(
         agent_id=request.agent_id,
         tenant_id=new_tenant_id,
         is_super_admin=request.is_super_admin,
+        roles=roles_str,
         expires_at=expires_at
     )
     db.add(db_token)
@@ -2049,7 +2520,7 @@ async def create_token(
     log = AuditLog(
         event_type="token_created",
         user=token_info.token_name or "admin",
-        action=f"Token '{request.name}' created (type={request.token_type}, super_admin={request.is_super_admin})",
+        action=f"Token '{request.name}' created (type={request.token_type}, roles={roles_str}, super_admin={request.is_super_admin})",
         details=f"agent_id={request.agent_id}, tenant_id={new_tenant_id}" if request.agent_id else f"tenant_id={new_tenant_id}",
         severity="INFO"
     )
@@ -2064,6 +2535,7 @@ async def create_token(
         agent_id=db_token.agent_id,
         tenant_id=db_token.tenant_id,
         is_super_admin=db_token.is_super_admin or False,
+        roles=db_token.roles or "admin",
         token=raw_token,  # Only returned once!
         expires_at=db_token.expires_at
     )
@@ -2132,6 +2604,7 @@ async def update_token(
         agent_id=db_token.agent_id,
         tenant_id=db_token.tenant_id,
         is_super_admin=db_token.is_super_admin or False,
+        roles=db_token.roles or "admin",
         created_at=db_token.created_at,
         expires_at=db_token.expires_at,
         last_used_at=db_token.last_used_at,

@@ -1,5 +1,6 @@
 # FRP Server Configuration
-# Accepts connections from data plane agents and exposes SSH tunnels
+# Accepts connections from data plane agents via STCP (P2P tunneling)
+# Single control port (7000) - no exposed port range needed
 
 bindPort = 7000
 
@@ -13,12 +14,8 @@ webServer.port = 7500
 webServer.user = "admin"
 webServer.password = "{{ .Envs.FRP_DASHBOARD_PASSWORD }}"
 
-# Port range for SSH tunnels (one per agent)
-# Default: 10 agents. Expand range in docker-compose.yml if needed.
-# For many agents (50+), consider STCP mode instead.
-allowPorts = [
-  { start = 6000, end = 6009 }
-]
+# STCP Mode: No allowPorts needed - all tunnels use P2P through control port
+# Each agent authenticates with unique secretKey in their STCP proxy config
 
 # Logging
 log.to = "console"

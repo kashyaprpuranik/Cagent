@@ -84,6 +84,7 @@ export const api = {
     agent_id: string | null;
     tenant_id: number | null;
     is_super_admin: boolean;
+    roles: string[];
   }> => {
     const response = await fetch(`${API_BASE}/auth/me`, {
       headers: getAuthHeaders(),

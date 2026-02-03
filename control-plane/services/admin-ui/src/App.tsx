@@ -10,6 +10,7 @@ import { Tokens } from './pages/Tokens';
 import { Tenants } from './pages/Tenants';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
+import { Terminal } from './pages/Terminal';
 import { api } from './api/client';
 
 // Set default token for API calls (can be changed in Settings)
@@ -31,6 +32,7 @@ function App() {
         <Route path="tokens" element={<Tokens />} />
         <Route path="tenants" element={<Tenants />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="terminal/:agentId" element={<Terminal />} />
       </Route>
       {/* Redirect old route */}
       <Route path="/audit-logs" element={<Navigate to="/admin-logs" replace />} />

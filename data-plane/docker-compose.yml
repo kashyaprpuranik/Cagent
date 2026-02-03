@@ -263,8 +263,9 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # FRP Client - Reverse tunnel for SSH access
+  # FRP Client - Reverse tunnel for SSH access via STCP
   # Connects outbound to control plane FRP server
+  # STCP mode: P2P tunneling with unique secret key per agent
   # Optional: Only runs with --profile ssh
   # ===========================================================================
   frpc:
@@ -278,7 +279,7 @@ services:
       - FRP_SERVER_PORT=${FRP_SERVER_PORT:-7000}
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
       - AGENT_ID=${AGENT_ID:-default}
-      - FRP_REMOTE_PORT=${FRP_REMOTE_PORT:-6000}
+      - STCP_SECRET_KEY=${STCP_SECRET_KEY}  # Unique per agent, from control plane API
 
     volumes:
       - ./configs/frpc/frpc.toml:/etc/frp/frpc.toml:ro

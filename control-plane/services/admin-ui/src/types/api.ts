@@ -151,6 +151,7 @@ export interface ApiToken {
   agent_id?: string;
   tenant_id?: number;
   is_super_admin: boolean;
+  roles?: string;  // Comma-separated: "admin", "developer", "admin,developer"
   created_at: string;
   expires_at?: string;
   last_used_at?: string;
@@ -159,6 +160,7 @@ export interface ApiToken {
 
 export interface ApiTokenCreated extends Omit<ApiToken, 'last_used_at' | 'enabled'> {
   token: string;  // Only returned once on creation!
+  roles: string;
 }
 
 export interface CreateApiTokenRequest {
@@ -167,6 +169,7 @@ export interface CreateApiTokenRequest {
   agent_id?: string;
   tenant_id?: number;
   is_super_admin?: boolean;
+  roles?: string;  // Comma-separated: "admin", "developer", "admin,developer"
   expires_in_days?: number;
 }
 
@@ -197,6 +200,31 @@ export interface LogQueryResponse {
     resultType: string;
     result: LogHit[];
   };
+}
+
+// Terminal session types
+export interface TerminalSession {
+  session_id: string;
+  agent_id: string;
+  user: string;
+  started_at: string;
+  ended_at?: string;
+  duration_seconds?: number;
+  bytes_sent: number;
+  bytes_received: number;
+}
+
+export interface STCPConfig {
+  server_addr: string;
+  server_port: number;
+  proxy_name: string;
+  secret_key: string;
+}
+
+export interface STCPSecretResponse {
+  agent_id: string;
+  secret_key: string;
+  message: string;
 }
 
 export interface LogHit {

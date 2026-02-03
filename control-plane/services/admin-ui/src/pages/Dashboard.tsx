@@ -1,11 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   Server,
-  KeyRound,
-  Key,
-  Activity,
-  ArrowRight,
   RefreshCw,
   Trash2,
   Play,
@@ -17,6 +13,7 @@ import {
   CheckCircle,
   XCircle,
   ShieldOff,
+  Terminal,
 } from 'lucide-react';
 import { Card, Badge, Button, Modal } from '../components/common';
 import { useAuth } from '../contexts/AuthContext';
@@ -35,8 +32,12 @@ import {
 
 export function Dashboard() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const { data: health } = useHealth();
   const { data: dataPlanes, refetch: refetchDataPlanes } = useDataPlanes();
+
+  // Check if user has developer role for terminal access
+  const hasDeveloperRole = user?.roles?.includes('developer') || user?.is_super_admin;
 
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -362,6 +363,25 @@ export function Dashboard() {
                       <Trash2 size={14} className="mr-1" />
                       Wipe
                     </Button>
+                    {/* Terminal button - requires developer role */}
+                    {hasDeveloperRole && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => navigate(`/terminal/${selectedAgentId}`)}
+                        disabled={!agentStatus?.online || agentStatus?.status !== 'running'}
+                        title={
+                          !agentStatus?.online
+                            ? 'Agent must be online'
+                            : agentStatus?.status !== 'running'
+                            ? 'Agent must be running'
+                            : 'Open Web Terminal'
+                        }
+                      >
+                        <Terminal size={14} className="mr-1" />
+                        Terminal
+                      </Button>
+                    )}
                   </>
                 )}
               </div>
@@ -476,65 +496,6 @@ export function Dashboard() {
         </Card>
       )}
 
-      {/* Quick Links */}
-      <Card title="Quick Actions">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2">
-          <Link
-            to="/secrets"
-            className="flex items-center justify-between p-3 rounded-lg bg-dark-900/50 hover:bg-dark-700 transition-colors"
-          >
-            <div className="flex items-center gap-3">
-              <KeyRound size={20} className="text-dark-400" />
-              <span className="text-dark-200">Manage Secrets</span>
-            </div>
-            <ArrowRight size={16} className="text-dark-500" />
-          </Link>
-          <Link
-            to="/allowlist"
-            className="flex items-center justify-between p-3 rounded-lg bg-dark-900/50 hover:bg-dark-700 transition-colors"
-          >
-            <div className="flex items-center gap-3">
-              <Activity size={20} className="text-dark-400" />
-              <span className="text-dark-200">Configure Allowlist</span>
-            </div>
-            <ArrowRight size={16} className="text-dark-500" />
-          </Link>
-          <Link
-            to="/rate-limits"
-            className="flex items-center justify-between p-3 rounded-lg bg-dark-900/50 hover:bg-dark-700 transition-colors"
-          >
-            <div className="flex items-center gap-3">
-              <Activity size={20} className="text-dark-400" />
-              <span className="text-dark-200">Rate Limits</span>
-            </div>
-            <ArrowRight size={16} className="text-dark-500" />
-          </Link>
-          <Link
-            to="/tokens"
-            className="flex items-center justify-between p-3 rounded-lg bg-dark-900/50 hover:bg-dark-700 transition-colors"
-          >
-            <div className="flex items-center gap-3">
-              <Key size={20} className="text-dark-400" />
-              <span className="text-dark-200">API Tokens</span>
-            </div>
-            <ArrowRight size={16} className="text-dark-500" />
-          </Link>
-          {user?.is_super_admin && (
-            <a
-              href="/grafana/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-between p-3 rounded-lg bg-dark-900/50 hover:bg-dark-700 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <Activity size={20} className="text-dark-400" />
-                <span className="text-dark-200">Open Grafana</span>
-              </div>
-              <ArrowRight size={16} className="text-dark-500" />
-            </a>
-          )}
-        </div>
-      </Card>
 
       {/* Wipe Confirmation Modal */}
       <Modal

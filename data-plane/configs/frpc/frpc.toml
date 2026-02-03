@@ -1,6 +1,6 @@
 # FRP Client Configuration
 # Connects outbound to control plane FRP server
-# Exposes SSH access to this agent
+# Exposes SSH access to this agent via STCP (P2P tunneling)
 
 serverAddr = "{{ .Envs.FRP_SERVER_ADDR }}"
 serverPort = 7000
@@ -17,10 +17,11 @@ log.level = "info"
 transport.poolCount = 2
 transport.tcpMux = true
 
-# SSH tunnel - exposes agent's SSH to control plane
+# SSH tunnel via STCP - P2P tunneling with unique secret per agent
+# No exposed port needed - visitors connect through FRP server
 [[proxies]]
 name = "{{ .Envs.AGENT_ID }}-ssh"
-type = "tcp"
+type = "stcp"
 localIP = "172.30.0.20"
 localPort = 22
-remotePort = {{ .Envs.FRP_REMOTE_PORT }}
+secretKey = "{{ .Envs.STCP_SECRET_KEY }}"

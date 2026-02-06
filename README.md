@@ -87,7 +87,24 @@ Secure development environment for AI agents with isolated networking and centra
 
 ## Quick Start
 
-### 1. Start Control Plane
+### Standalone Mode
+
+Run the data plane without a control plane. Uses static configuration files.
+
+```bash
+cd data-plane
+
+docker-compose up -d
+
+# Allowlist: configs/coredns/allowlist.hosts
+# Secrets: environment variables or configs/envoy/envoy.yaml
+```
+
+### Connected Mode
+
+Run with centralized management via the control plane.
+
+**1. Start Control Plane**
 
 ```bash
 cd control-plane
@@ -103,19 +120,15 @@ docker-compose up -d
 # - OpenObserve:  http://localhost:5080 (admin@maltbox.local/admin)
 ```
 
-### 2. Start Data Plane
+**2. Start Data Plane**
 
 ```bash
 cd data-plane
 
-# Standalone mode (no control plane):
-docker-compose up -d
-# Uses static config from configs/coredns/allowlist.hosts and environment variables
-
-# Connected mode (with control plane):
 export CONTROL_PLANE_URL=http://<control-plane-ip>:8002
-export CONTROL_PLANE_TOKEN=dev-token  # Must match API_TOKENS in control plane
-export AGENT_ID=my-agent-01           # Optional: unique ID (default: "default")
+export CONTROL_PLANE_TOKEN=dev-token
+export AGENT_ID=my-agent-01  # Unique ID for this data plane
+
 docker-compose up -d
 
 # With log shipping to OpenObserve:
@@ -123,37 +136,26 @@ export OPENOBSERVE_HOST=<control-plane-ip>
 docker-compose --profile auditing up -d
 ```
 
-### 3. Web Terminal Access (Optional)
+**3. Web Terminal (Optional)**
 
-The Admin UI includes a browser-based terminal for accessing agent containers. This uses STCP (Secret TCP) mode with FRP for secure tunneling through a single port.
+Browser-based SSH access to agent containers via STCP tunnels.
 
 ```
 Browser → Admin UI → WebSocket → Control Plane API → STCP → FRP → Agent:22
 ```
 
-**Setup:**
-
-1. Generate STCP secret for the agent (via Admin UI or API):
+Setup:
+1. Generate STCP secret: `curl -X POST http://localhost:8002/api/v1/agents/my-agent/stcp-secret -H "Authorization: Bearer admin-token"`
+2. Add to `data-plane/.env`:
    ```bash
-   curl -X POST http://localhost:8002/api/v1/agents/my-agent/stcp-secret \
-     -H "Authorization: Bearer admin-token"
-   ```
-
-2. Configure data plane with the secret:
-   ```bash
-   # Add to data-plane/.env
    FRP_SERVER_ADDR=<control-plane-ip>
-   FRP_AUTH_TOKEN=<token>
    STCP_SECRET_KEY=<secret-from-step-1>
    SSH_AUTHORIZED_KEYS="ssh-rsa AAAA... user@host"
-
-   # Start with SSH profile
-   docker-compose --profile ssh up -d
    ```
+3. Start with SSH profile: `docker-compose --profile ssh up -d`
+4. Access terminal from Admin UI Dashboard (requires `developer` role)
 
-3. Access terminal from Admin UI Dashboard (requires `developer` role)
-
-See [control-plane/README.md](control-plane/README.md#web-terminal) and [data-plane/README.md](data-plane/README.md#ssh-access-via-frp) for detailed configuration.
+See [control-plane/README.md](control-plane/README.md#web-terminal) and [data-plane/README.md](data-plane/README.md#ssh-access-via-frp) for details.
 
 ## Features
 

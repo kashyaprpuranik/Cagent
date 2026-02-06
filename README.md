@@ -2,6 +2,31 @@
 
 Secure development environment for AI agents with isolated networking and centralized control.
 
+## Problem
+
+AI coding agents need network access to be useful—fetching documentation, calling APIs, installing packages. But unrestricted network access creates serious risks:
+
+- **Data exfiltration**: Agent sends proprietary code or secrets to unauthorized endpoints
+- **Credential theft**: Agent extracts API keys from environment and leaks them
+- **Supply chain attacks**: Agent installs malicious packages or executes untrusted code
+- **Runaway costs**: Agent makes unlimited API calls, racking up unexpected bills
+- **Lateral movement**: Compromised agent pivots to internal services
+
+The core tension: agents need enough access to work, but not so much that a misaligned or compromised agent can cause damage.
+
+## Threat Model
+
+Maltbox assumes the AI agent is **untrusted by default**. The agent may be:
+
+| Threat | Description |
+|--------|-------------|
+| **Misaligned** | Pursues goals that don't match user intent (prompt injection, jailbreak) |
+| **Compromised** | Executes malicious code from a poisoned dependency or hostile input |
+| **Overly capable** | Has access to credentials/APIs it shouldn't, even if behaving correctly |
+| **Unpredictable** | Makes unexpected network requests due to hallucination or bugs |
+
+**Not in scope**: Maltbox does not protect against attacks from the host machine, malicious administrators, or physical access. It assumes the control plane and infrastructure operators are trusted.
+
 ## Security Model
 
 ### Network Isolation

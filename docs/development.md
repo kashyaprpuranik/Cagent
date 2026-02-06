@@ -228,3 +228,32 @@ docker-compose down -v
 # Restart (will auto-seed)
 docker-compose up -d
 ```
+
+## Directory Structure
+
+```
+.
+├── control-plane/
+│   ├── docker-compose.yml      # Control plane services
+│   ├── configs/
+│   │   └── frps/               # FRP server config (STCP tunnels)
+│   └── services/
+│       ├── control-plane/      # Control plane API (secrets, allowlist, audit, IP ACLs)
+│       └── admin-ui/           # React admin console with web terminal
+│
+└── data-plane/
+    ├── docker-compose.yml          # Data plane services
+    ├── configs/
+    │   ├── maltbox.yaml        # Unified config (generates CoreDNS + Envoy)
+    │   ├── coredns/            # DNS config (generated from maltbox.yaml)
+    │   ├── envoy/              # Proxy config (generated from maltbox.yaml)
+    │   ├── vector/             # Log collection & forwarding
+    │   └── frpc/               # FRP client config (STCP tunnels)
+    ├── services/
+    │   ├── agent-manager/      # Container lifecycle + config generation
+    │   ├── local-admin/        # Local admin UI (standalone mode)
+    │   │   ├── frontend/       # React app with web terminal
+    │   │   └── backend/        # FastAPI backend
+    │   └── config-generator/   # maltbox.yaml → CoreDNS/Envoy configs
+    └── tests/                  # Unit and E2E tests
+```

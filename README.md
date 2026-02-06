@@ -2,6 +2,33 @@
 
 Secure development environment for AI agents with isolated networking and centralized control.
 
+## Security Model
+
+### Network Isolation
+- **agent-net**: Internal network, no external access. Agent can only reach Envoy and CoreDNS.
+- **infra-net**: Can reach external services. Used by Envoy (credentials), Vector (logs → OpenObserve), and Agent Manager (polls CP).
+- **IPv6 disabled**: Prevents bypass of IPv4 egress controls.
+
+### Polling Architecture (No Inbound Ports)
+- Data plane has **no inbound ports** - control plane cannot initiate connections
+- Agent Manager polls control plane every 30s for commands (wipe, restart, stop, start)
+- Vector pushes logs directly to OpenObserve (not through CP API)
+- Allowlist synced from CP to CoreDNS every 5 minutes
+
+### Agent Container Hardening
+- Read-only root filesystem
+- Dropped all capabilities
+- No privilege escalation (`no-new-privileges`)
+- Resource limits (CPU, memory, pids)
+- DNS forced through CoreDNS filter
+- All HTTP(S) traffic forced through Envoy proxy
+- Optional [gVisor](https://gvisor.dev) kernel isolation (`CONTAINER_RUNTIME=runsc`)
+
+### Credential Security
+- Secrets encrypted with Fernet (AES) and stored in Postgres
+- Envoy Lua filter fetches and injects credentials (cached for 5 min)
+- Agent never sees the actual credentials
+
 ## Quick Start
 
 ### Standalone Mode
@@ -168,33 +195,6 @@ Setup:
 
 See [control-plane/README.md](control-plane/README.md#web-terminal) and [data-plane/README.md](data-plane/README.md#ssh-access) for details.
 
-## Security Model
-
-### Network Isolation
-- **agent-net**: Internal network, no external access. Agent can only reach Envoy and CoreDNS.
-- **infra-net**: Can reach external services. Used by Envoy (credentials), Vector (logs → OpenObserve), and Agent Manager (polls CP).
-- **IPv6 disabled**: Prevents bypass of IPv4 egress controls.
-
-### Polling Architecture (No Inbound Ports)
-- Data plane has **no inbound ports** - control plane cannot initiate connections
-- Agent Manager polls control plane every 30s for commands (wipe, restart, stop, start)
-- Vector pushes logs directly to OpenObserve (not through CP API)
-- Allowlist synced from CP to CoreDNS every 5 minutes
-
-### Agent Container Hardening
-- Read-only root filesystem
-- Dropped all capabilities
-- No privilege escalation (`no-new-privileges`)
-- Resource limits (CPU, memory, pids)
-- DNS forced through CoreDNS filter
-- All HTTP(S) traffic forced through Envoy proxy
-- Optional [gVisor](https://gvisor.dev) kernel isolation (`CONTAINER_RUNTIME=runsc`)
-
-### Credential Security
-- Secrets encrypted with Fernet (AES) and stored in Postgres
-- Envoy Lua filter fetches and injects credentials (cached for 5 min)
-- Agent never sees the actual credentials
-
 ## Features
 
 | Feature | Description |
@@ -223,35 +223,6 @@ See [control-plane/README.md](control-plane/README.md#web-terminal) and [data-pl
 | **gVisor Isolation** | Optional kernel-level syscall isolation (`CONTAINER_RUNTIME=runsc`) |
 | **IPv6 Disabled** | Prevents bypass of IPv4 egress controls |
 
-## Directory Structure
-
-```
-.
-├── control-plane/
-│   ├── docker-compose.yml      # Control plane services
-│   ├── configs/
-│   │   └── frps/               # FRP server config (STCP tunnels)
-│   └── services/
-│       ├── control-plane/      # Control plane API (secrets, allowlist, audit, IP ACLs)
-│       └── admin-ui/           # React admin console with web terminal
-│
-└── data-plane/
-    ├── docker-compose.yml          # Data plane services
-    ├── configs/
-    │   ├── maltbox.yaml        # Unified config (generates CoreDNS + Envoy)
-    │   ├── coredns/            # DNS config (generated from maltbox.yaml)
-    │   ├── envoy/              # Proxy config (generated from maltbox.yaml)
-    │   ├── vector/             # Log collection & forwarding
-    │   └── frpc/               # FRP client config (STCP tunnels)
-    ├── services/
-    │   ├── agent-manager/      # Container lifecycle + config generation
-    │   ├── local-admin/        # Local admin UI (standalone mode)
-    │   │   ├── frontend/       # React app with web terminal
-    │   │   └── backend/        # FastAPI backend
-    │   └── config-generator/   # maltbox.yaml → CoreDNS/Envoy configs
-    └── tests/                  # Unit and E2E tests
-```
-
 ## Configuration
 
 See [docs/configuration.md](docs/configuration.md) for detailed configuration including:
@@ -271,15 +242,7 @@ See [docs/configuration.md](docs/configuration.md) for detailed configuration in
 | `dev` | Developer | Dashboard, agent logs, web terminal, settings only |
 | `agent` | Data plane token | Heartbeat, secrets/for-domain, rate-limits/for-domain (agent-scoped) |
 
-### Default Development Tokens
-
-| Token Name | Raw Token | Type |
-|------------|-----------|------|
-| `super-admin-token` | `super-admin-test-token-do-not-use-in-production` | superadmin |
-| `admin-token` | `admin-test-token-do-not-use-in-production` | admin |
-| `dev-token` | `dev-test-token-do-not-use-in-production` | dev |
-
-Tokens are managed via the Admin UI (`/tokens`) or API. See [docs/development.md](docs/development.md) for details.
+Tokens are managed via the Admin UI (`/tokens`) or API. See [docs/development.md](docs/development.md) for default development tokens.
 
 ## Documentation
 

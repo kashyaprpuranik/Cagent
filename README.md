@@ -71,52 +71,68 @@ The `secure` profile enables:
 
 ### Standalone Mode
 
-Run the data plane without a control plane. Uses a stateless local admin UI for management.
+Run the data plane without a control plane.
+
+#### Minimal (Static Config)
+
+Lightweight setup with just 3 containers. Edit `coredns/Corefile` and `envoy/envoy.yaml` directly.
+
+```
+┌───────────────────────────────────────────────────────┐
+│                  agent-net (isolated)                  │
+│                                                        │
+│    ┌────────────────────────────────────────────┐     │
+│    │              Agent Container                │     │
+│    │  • Isolated network (no direct internet)    │     │
+│    │  • All HTTP(S) via Envoy                    │     │
+│    │  • DNS via CoreDNS                          │     │
+│    └────────────────────────────────────────────┘     │
+│                 │                   │                  │
+│                 ▼                   ▼                  │
+│          ┌───────────┐       ┌───────────┐            │
+│          │   Envoy   │       │  CoreDNS  │            │
+│          │  (~50MB)  │       │  (~20MB)  │            │
+│          └───────────┘       └───────────┘            │
+└───────────────────────────────────────────────────────┘
+```
+
+```bash
+cd data-plane
+docker-compose --profile standard up -d
+```
+
+#### Managed (With Admin UI)
+
+Adds agent-manager (watches `maltbox.yaml`) and local admin UI for browser-based management.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     DATA PLANE (standalone)                      │
+│                     DATA PLANE (managed)                         │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────────┐│
 │  │                 Local Admin UI (:8080)                      ││
-│  │  • Structured config editor    • Health checks              ││
-│  │  • Log viewer + analytics      • Web terminal               ││
-│  │  • SSH tunnel setup                                         ││
+│  │  • Config editor    • Health checks    • Web terminal       ││
 │  └─────────────────────────────────────────────────────────────┘│
 │                              │                                   │
-│                              ▼                                   │
-│  ┌──────────────┐    ┌─────────────┐                            │
-│  │Agent Manager │◄───│ maltbox.yaml│ ─── generates ──┐          │
-│  │(watch+reload)│    │  (config)   │                 │          │
-│  └──────────────┘    └─────────────┘                 │          │
-│                                                      ▼          │
+│  ┌──────────────┐    ┌──────┴──────┐                            │
+│  │Agent Manager │◄───│ maltbox.yaml│──── generates ───┐         │
+│  └──────────────┘    └─────────────┘                  │         │
+│                                                       ▼         │
 │  ┌─────────────────────────────────────────────────────────────┐│
 │  │                    agent-net (isolated)                     ││
-│  │  ┌─────────────────────────────────────────────────────┐   ││
-│  │  │                  Agent Container                     │   ││
-│  │  │  • Isolated network (no direct internet)             │   ││
-│  │  │  • All HTTP(S) via Envoy    • DNS via CoreDNS        │   ││
-│  │  └─────────────────────────────────────────────────────┘   ││
-│  │              │                         │                    ││
-│  │              ▼                         ▼                    ││
-│  │       ┌───────────┐             ┌───────────┐              ││
-│  │       │   Envoy   │             │  CoreDNS  │              ││
-│  │       │ (+ creds) │             │ (filter)  │              ││
-│  │       └───────────┘             └───────────┘              ││
+│  │    ┌─────────────────────────────────────────────────┐     ││
+│  │    │                 Agent Container                  │     ││
+│  │    └─────────────────────────────────────────────────┘     ││
+│  │                 │                       │                   ││
+│  │          ┌──────┴──────┐         ┌──────┴──────┐           ││
+│  │          │    Envoy    │         │   CoreDNS   │           ││
+│  │          └─────────────┘         └─────────────┘           ││
 │  └─────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ```bash
 cd data-plane
-
-# Static config (no agent-manager, edit configs directly)
-docker-compose --profile standard up -d
-
-# Dynamic config (agent-manager watches maltbox.yaml and regenerates configs)
-docker-compose --profile standard --profile managed up -d
-
-# With local admin UI (includes agent-manager)
 docker-compose --profile standard --profile admin up -d
 
 # With gVisor isolation (requires gVisor installed)

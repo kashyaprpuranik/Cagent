@@ -311,15 +311,18 @@ services:
       retries: 3
 
   # ===========================================================================
-  # Agent Manager - Container lifecycle management (wipe, restart, status)
-  # Polls control plane for commands - no inbound ports required
-  # Generates CoreDNS and Envoy configs from maltbox.yaml
+  # Agent Manager - Watches maltbox.yaml and regenerates configs
+  # Optional: Only needed if you want dynamic config updates
+  # For static configs, edit coredns/Corefile and envoy/envoy.yaml directly
   # ===========================================================================
   agent-manager:
     build:
       context: ./services
       dockerfile: agent-manager/Dockerfile
     container_name: agent-manager
+    profiles:
+      - managed
+      - admin  # Admin UI benefits from agent-manager for config reload
 
     environment:
       - AGENT_CONTAINER_NAME=agent

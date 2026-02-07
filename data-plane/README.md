@@ -12,7 +12,7 @@ The data plane provides a secure, isolated execution environment for AI agents w
 │  │  ┌─────────┐                                            │    │
 │  │  │  Agent  │ ──HTTP──► ┌───────────┐                    │    │
 │  │  │Container│           │   Envoy   │ ──HTTPS──► Internet│    │
-│  │  └─────────┘ ──DNS───► │   Proxy   │                    │    │
+│  │  └─────────┘           │   Proxy   │                    │    │
 │  │       │                └───────────┘                    │    │
 │  │       │                      │                          │    │
 │  │       └──────► ┌─────────────┴───┐                      │    │

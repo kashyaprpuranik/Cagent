@@ -1,6 +1,6 @@
 # Cagent
 
-Secure development environment for AI agents with isolated networking and centralized control.
+Secure development and execution environment for AI agents with isolated networking and centralized control.
 
 ## Problem
 
@@ -39,9 +39,9 @@ Cagent has layered trust boundaries with different levels of protection:
 
 **What current controls provide:**
 - **Multi-tenancy isolation**: Tenant A cannot access Tenant B's secrets, agents, or configuration
-- **Credential theft resistance**: Compromised admin token from one tenant cannot access others
 - **Network-based restrictions**: IP ACLs limit where admin operations can originate
 - **Least-privilege agents**: Agent tokens can only read their own configuration, not modify it
+- **Rate limiting**: Incoming requests are rate limited per token.
 
 **What is NOT currently defended:**
 - Malicious or compromised super admins (full platform access)
@@ -51,7 +51,7 @@ Cagent has layered trust boundaries with different levels of protection:
 
 ### Production Hardening
 
-For production deployments, consider adding: API gateway with WAF (rate limiting, OWASP rules), mandatory MFA via OIDC, SIEM integration for audit logs, mTLS between data plane and control plane, and network segmentation to isolate the control plane from public internet.
+For production deployments, consider adding: API gateway with WAF, mandatory MFA, SIEM integration for audit logs, mTLS between data plane and control plane, and network segmentation to isolate the control plane from public internet.
 
 ## Security Principles
 
@@ -93,17 +93,8 @@ For production deployments, consider adding: API gateway with WAF (rate limiting
 
 **Defense in Depth**: Network isolation doesn't depend solely on Envoy/CoreDNS being healthy. The `internal: true` network flag removes the default gateway at the Docker level. For additional hardening, run the iptables script:
 
-```bash
-sudo ./data-plane/scripts/network-hardening.sh
-```
-
-This adds explicit iptables rules that DROP all traffic from the agent container except to Envoy (8443) and CoreDNS (53). Even if both services crash, the agent cannot reach the internet.
-
 **Egress Volume Limits**: Prevents large-scale data exfiltration by tracking bytes sent per domain per hour. Configure via `STATIC_EGRESS_LIMITS` environment variable:
-```bash
-# Format: domain:bytes_per_hour (comma-separated)
-STATIC_EGRESS_LIMITS="api.openai.com:10485760,default:104857600"  # 10MB for OpenAI, 100MB default
-```
+
 **Limitation**: Byte counts are in-memory and reset when Envoy restarts. See roadmap for persistent state.
 
 ### Kernel Isolation (Default)
@@ -134,11 +125,11 @@ docker-compose --profile dev --profile admin up -d
 
 ### Standalone Mode
 
-Run the data plane without a control plane.
+Run the data plane without a control plane - ideal for local use of one agent.
 
 #### Minimal (Static Config)
 
-Lightweight setup with just 3 containers. Edit `cagent.yaml` and run the config generator, or edit raw `coredns/Corefile` and `envoy/envoy.yaml` directly for advanced use.
+Lightweight setup with just 3 containers. Edit `cagent.yaml` and run the config generator, or edit raw `coredns/Corefile` and `envoy/envoy.yaml` directly for advanced use. Ideal for simple static domain policies on one agent.
 
 ```
 ┌───────────────────────────────────────────────────────┐
@@ -171,7 +162,7 @@ docker-compose --profile dev up -d
 
 #### Locally Managed (With Admin UI)
 
-Adds agent-manager (watches `cagent.yaml`) and local admin UI for browser-based management and observability.
+Adds agent-manager (watches `cagent.yaml`) and local admin UI for browser-based management and observability. Ideal for complex and changing domain policies on one agent.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -217,7 +208,7 @@ docker-compose --profile dev --profile admin up -d
 
 ### Control Plane Mode
 
-Run with centralized management via the control plane. Supports multiple tenants and agents.
+Run with centralized management via the control plane. Ideal for multiple tenants and agents.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
@@ -309,7 +300,7 @@ docker-compose --profile auditing up -d
 
 | Method | Standalone | Control Plane Mode |
 |--------|------------|-------------------|
-| **Web Terminal** | http://localhost:8080 → Terminal | http://localhost:9080 → Dashboard → Terminal |
+| **Web Terminal** | http://<local-admin-ui>:8080 → Terminal | http://<admin-ui>:9080 → Dashboard → Terminal |
 | **Docker exec** | `docker exec -it agent bash` | Same (requires host access) |
 | **SSH** | Configure via Local Admin UI | Configure via CP API |
 
@@ -334,7 +325,6 @@ See [data-plane/README.md](data-plane/README.md#ssh-access) for details.
 |---------|-------------|
 | **Domain Allowlist** | Only approved domains can be accessed (enforced by CoreDNS and Envoy) |
 | **Credential Injection** | API keys injected by proxy, never exposed to agent |
-| **Domain Aliases** | Use `*.devbox.local` shortcuts (e.g., `openai.devbox.local`) |
 | **Rate Limiting** | Per-domain rate limits to control API usage |
 | **Centralized Logging** | HTTP requests, DNS queries, and gVisor syscalls logged to OpenObserve |
 | **Traffic Analytics** | Requests/sec, top domains, error rates in log viewer |
@@ -347,8 +337,7 @@ See [data-plane/README.md](data-plane/README.md#ssh-access) for details.
 ## Configuration
 
 See [docs/configuration.md](docs/configuration.md) for detailed configuration including:
-- Adding allowed domains
-- Adding secrets (domain-scoped, with aliases)
+- Domain policies
 - Agent management commands
 - Per-agent configuration (agent-specific secrets, allowlists, rate limits)
 

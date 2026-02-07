@@ -236,29 +236,18 @@ See [data-plane/README.md](data-plane/README.md#ssh-access) for details.
 
 | Feature | Description |
 |---------|-------------|
-| **Admin UI** | Web console for managing agents, secrets, allowlists (both modes) |
-| **Web Terminal** | Browser-based shell access to agents (xterm.js) in both modes |
-| **Local Admin UI** | Standalone mode management with structured config editor |
-| **Multi-Agent Support** | Manage multiple data planes from a single control plane |
-| **Agent Control** | Start/stop/restart/wipe agent containers from UI |
-| **Domain Allowlist** | Only approved domains can be accessed (synced to CoreDNS) |
-| **Egress Proxy** | All HTTP(S) traffic routed through Envoy with logging |
+| **Domain Allowlist** | Only approved domains can be accessed (enforced by CoreDNS and Envoy) |
 | **Credential Injection** | API keys injected by proxy, never exposed to agent |
 | **Domain Aliases** | Use `*.devbox.local` shortcuts (e.g., `openai.devbox.local`) |
-| **Unified Config** | Single `maltbox.yaml` generates CoreDNS and Envoy configs |
-| **Config Validation** | Form-based editor with domain/CIDR validation |
-| **Health Checks** | DNS resolution, Envoy ready status monitoring |
-| **Traffic Analytics** | Requests/sec, top domains, error rates in log viewer |
-| **Centralized Logging** | All agent activity logged to OpenObserve (Vector collector) |
-| **Secret Management** | Encrypted secrets in Postgres (Fernet/AES) |
 | **Rate Limiting** | Per-domain rate limits to control API usage |
+| **Centralized Logging** | All agent activity logged to OpenObserve (Vector) |
+| **Traffic Analytics** | Requests/sec, top domains, error rates in log viewer |
+| **Web Terminal** | Browser-based shell access to agents (xterm.js) |
+| **Multi-Agent Support** | Manage multiple data planes from a single control plane |
+| **Agent Control** | Start/stop/restart/wipe agent containers from UI |
 | **IP ACLs** | Restrict control plane access by IP range per tenant |
-| **Audit Logs** | Full audit trail of all actions |
-| **RBAC** | Role-based access control (superadmin, admin, dev) |
 | **STCP Tunnels** | Secure tunnels via single port (no port-per-agent allocation) |
-| **Auto-STCP Setup** | Configure SSH tunnels from local admin UI |
-| **gVisor Isolation** | Optional kernel-level syscall isolation (`CONTAINER_RUNTIME=runsc`) |
-| **IPv6 Disabled** | Prevents bypass of IPv4 egress controls |
+| **gVisor Isolation** | Optional kernel-level syscall isolation for defense in depth |
 
 ## Configuration
 

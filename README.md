@@ -215,26 +215,22 @@ export OPENOBSERVE_HOST=<control-plane-ip>
 docker-compose --profile auditing up -d
 ```
 
-**3. Web Terminal (Optional)**
+**3. Accessing the Agent**
 
-Browser-based SSH access to agent containers via STCP tunnels.
+| Method | Standalone | Control Plane Mode |
+|--------|------------|-------------------|
+| **Web Terminal** | http://localhost:8080 → Terminal | http://localhost:9080 → Dashboard → Terminal |
+| **Docker exec** | `docker exec -it agent bash` | Same (requires host access) |
+| **SSH** | Configure via Local Admin UI | Configure via CP API |
 
-```
-Browser → Admin UI → WebSocket → Control Plane API → STCP → FRP → Agent:22
-```
+The web terminal is the easiest - just open the Admin UI and click Terminal.
 
-Setup:
+For SSH access in Control Plane Mode (remote data planes):
 1. Generate STCP secret: `curl -X POST http://localhost:8002/api/v1/agents/my-agent/stcp-secret -H "Authorization: Bearer admin-token"`
-2. Add to `data-plane/.env`:
-   ```bash
-   FRP_SERVER_ADDR=<control-plane-ip>
-   STCP_SECRET_KEY=<secret-from-step-1>
-   SSH_AUTHORIZED_KEYS="ssh-rsa AAAA... user@host"
-   ```
-3. Start with SSH profile: `docker-compose --profile ssh up -d`
-4. Access terminal from Admin UI Dashboard
+2. Add to `data-plane/.env`: `STCP_SECRET_KEY=<secret>`, `FRP_SERVER_ADDR=<control-plane-ip>`
+3. Start with SSH profile: `docker-compose --profile standard --profile ssh up -d`
 
-See [control-plane/README.md](control-plane/README.md#web-terminal) and [data-plane/README.md](data-plane/README.md#ssh-access) for details.
+See [data-plane/README.md](data-plane/README.md#ssh-access) for details.
 
 ## Features
 

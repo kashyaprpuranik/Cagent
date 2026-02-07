@@ -214,7 +214,6 @@ Restrict control plane access to specific IP ranges per tenant.
 **How IP ACLs work:**
 - If no IP ACLs are configured for a tenant, all IPs are allowed (default)
 - Once any ACL is added, only matching IPs can access the control plane
-- Super admins always bypass IP restrictions
 - Agent tokens (used by data planes) are not affected by IP ACLs
 - CIDR notation: use `/32` for single IP, `/24` for subnet, etc.
 

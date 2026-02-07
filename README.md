@@ -4,7 +4,7 @@ Secure development environment for AI agents with isolated networking and centra
 
 ## Problem
 
-AI coding agents need network access to be useful—fetching documentation, calling APIs, installing packages. But unrestricted network access creates serious risks:
+AI agents need network access to be useful—fetching documentation, calling APIs, installing packages. But unrestricted access creates serious risks:
 
 - **Data exfiltration**: Agent sends proprietary code or secrets to unauthorized endpoints. Example: [Google's Gemini exfiltrating data via markdown image rendering](https://www.promptarmor.com/resources/google-antigravity-exfiltrates-data)
 - **Credential theft**: Agent extracts API keys from environment and leaks them

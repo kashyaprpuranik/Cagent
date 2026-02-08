@@ -26,6 +26,7 @@ export interface AuditLog {
 }
 
 export interface AuditLogFilters {
+  tenant_id?: number;
   event_type?: string;
   user?: string;
   severity?: string;

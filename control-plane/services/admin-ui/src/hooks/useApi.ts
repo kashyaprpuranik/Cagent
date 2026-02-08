@@ -21,11 +21,12 @@ export function useHealth() {
 }
 
 // Data Planes / Agents
-export function useDataPlanes() {
+export function useDataPlanes(tenantId?: number | null) {
   return useQuery({
-    queryKey: ['dataPlanes'],
-    queryFn: api.getDataPlanes,
+    queryKey: ['dataPlanes', tenantId],
+    queryFn: () => api.getDataPlanes(tenantId ?? undefined),
     refetchInterval: 10000,
+    enabled: tenantId !== null, // Wait for tenant to be set if using tenant filter
   });
 }
 
@@ -96,10 +97,11 @@ export function useStartAgent() {
 }
 
 // API Tokens
-export function useTokens() {
+export function useTokens(tenantId?: number | null) {
   return useQuery({
-    queryKey: ['tokens'],
-    queryFn: api.getTokens,
+    queryKey: ['tokens', tenantId],
+    queryFn: () => api.getTokens(tenantId ?? undefined),
+    enabled: tenantId !== null, // Wait for tenant to be set if using tenant filter
   });
 }
 
@@ -252,17 +254,22 @@ export function useDeleteTenantIpAcl() {
 }
 
 // Domain Policies
-export function useDomainPolicies(agentId?: string) {
+export function useDomainPolicies(params?: { agentId?: string; tenantId?: number | null }) {
   return useQuery({
-    queryKey: ['domainPolicies', agentId],
-    queryFn: () => api.getDomainPolicies(agentId),
+    queryKey: ['domainPolicies', params?.agentId, params?.tenantId],
+    queryFn: () => api.getDomainPolicies({
+      agentId: params?.agentId,
+      tenantId: params?.tenantId ?? undefined,
+    }),
+    enabled: params?.tenantId !== null, // Wait for tenant to be set if using tenant filter
   });
 }
 
 export function useCreateDomainPolicy() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (data: CreateDomainPolicyRequest) => api.createDomainPolicy(data),
+    mutationFn: ({ data, tenantId }: { data: CreateDomainPolicyRequest; tenantId?: number }) =>
+      api.createDomainPolicy(data, tenantId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['domainPolicies'] });
     },

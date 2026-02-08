@@ -1,39 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Plus, Trash2, ToggleLeft, ToggleRight, Network } from 'lucide-react';
-import { Card, Table, Button, Modal, Input, Select, Badge } from '../components/common';
+import { Card, Table, Button, Modal, Input, Badge } from '../components/common';
 import {
   useTenantIpAcls,
   useCreateTenantIpAcl,
   useUpdateTenantIpAcl,
   useDeleteTenantIpAcl,
-  useTenants,
 } from '../hooks/useApi';
-import { useAuth } from '../contexts/AuthContext';
-import type { TenantIpAcl, Tenant } from '../types/api';
+import { useTenant } from '../contexts/TenantContext';
+import type { TenantIpAcl } from '../types/api';
 
 export function IpAcls() {
-  const { user } = useAuth();
-
-  // For non-super-admins, use their tenant_id directly
-  // For super-admins, allow tenant selection
-  const [selectedTenantId, setSelectedTenantId] = useState<number | null>(null);
-
-  // Set tenant from user immediately if available (before tenants load)
-  useEffect(() => {
-    if (user?.tenant_id && !selectedTenantId) {
-      setSelectedTenantId(user.tenant_id);
-    }
-  }, [user?.tenant_id, selectedTenantId]);
-
-  // Only fetch tenants list for super admins (regular admins get 403 on this endpoint)
-  const { data: tenants = [] } = useTenants(user?.is_super_admin === true);
-
-  // For super admins, select first tenant if none selected
-  useEffect(() => {
-    if (user?.is_super_admin && tenants.length > 0 && !selectedTenantId) {
-      setSelectedTenantId(tenants[0].id);
-    }
-  }, [user?.is_super_admin, tenants, selectedTenantId]);
+  const { selectedTenantId } = useTenant();
 
   const { data: ipAcls = [], isLoading } = useTenantIpAcls(selectedTenantId);
   const createAcl = useCreateTenantIpAcl();
@@ -108,12 +86,6 @@ export function IpAcls() {
       // Error handled by mutation
     }
   };
-
-  // Build tenant options for super admins
-  const tenantOptions = tenants.map((tenant: Tenant) => ({
-    value: String(tenant.id),
-    label: `${tenant.name} (${tenant.slug})`,
-  }));
 
   const columns = [
     {
@@ -204,21 +176,6 @@ export function IpAcls() {
           Add IP Range
         </Button>
       </div>
-
-      {/* Tenant selector for super admins */}
-      {user?.is_super_admin && tenantOptions.length > 0 && (
-        <Card>
-          <div className="flex items-center gap-4">
-            <label className="text-dark-300 font-medium">Tenant:</label>
-            <Select
-              options={tenantOptions}
-              value={selectedTenantId ? String(selectedTenantId) : ''}
-              onChange={(e) => setSelectedTenantId(Number(e.target.value))}
-              className="w-64"
-            />
-          </div>
-        </Card>
-      )}
 
       <Card>
         <Table

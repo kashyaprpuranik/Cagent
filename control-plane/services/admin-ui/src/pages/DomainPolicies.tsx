@@ -9,6 +9,7 @@ import {
   useRotateDomainPolicyCredential,
   useAgents,
 } from '../hooks/useApi';
+import { useTenant } from '../contexts/TenantContext';
 import type { DomainPolicy, DataPlane, CreateDomainPolicyRequest, UpdateDomainPolicyRequest } from '../types/api';
 
 interface FormData {
@@ -20,6 +21,7 @@ interface FormData {
   requests_per_minute: string;
   burst_size: string;
   bytes_per_hour: string;
+  enable_credential: boolean;
   credential_header: string;
   credential_format: string;
   credential_value: string;
@@ -34,13 +36,16 @@ const emptyFormData: FormData = {
   requests_per_minute: '',
   burst_size: '',
   bytes_per_hour: '',
+  enable_credential: false,
   credential_header: 'Authorization',
   credential_format: 'Bearer {value}',
   credential_value: '',
 };
 
 export function DomainPolicies() {
-  const { data: policies = [], isLoading, refetch } = useDomainPolicies();
+  const { selectedTenantId } = useTenant();
+
+  const { data: policies = [], isLoading, refetch } = useDomainPolicies({ tenantId: selectedTenantId });
   const { data: agents = [] } = useAgents();
   const createPolicy = useCreateDomainPolicy();
   const updatePolicy = useUpdateDomainPolicy();
@@ -81,6 +86,7 @@ export function DomainPolicies() {
       requests_per_minute: policy.requests_per_minute?.toString() || '',
       burst_size: policy.burst_size?.toString() || '',
       bytes_per_hour: policy.bytes_per_hour?.toString() || '',
+      enable_credential: policy.has_credential || false,
       credential_header: policy.credential_header || 'Authorization',
       credential_format: policy.credential_format || 'Bearer {value}',
       credential_value: '',
@@ -105,7 +111,7 @@ export function DomainPolicies() {
       bytes_per_hour: formData.bytes_per_hour ? parseInt(formData.bytes_per_hour) : undefined,
     };
 
-    if (formData.credential_value) {
+    if (formData.enable_credential && formData.credential_value) {
       data.credential = {
         header: formData.credential_header,
         format: formData.credential_format,
@@ -114,7 +120,10 @@ export function DomainPolicies() {
     }
 
     try {
-      await createPolicy.mutateAsync(data);
+      await createPolicy.mutateAsync({
+        data,
+        tenantId: selectedTenantId ?? undefined,
+      });
       setCreateModal(false);
       resetForm();
     } catch {
@@ -139,7 +148,7 @@ export function DomainPolicies() {
       bytes_per_hour: formData.bytes_per_hour ? parseInt(formData.bytes_per_hour) : undefined,
     };
 
-    if (formData.credential_value) {
+    if (formData.enable_credential && formData.credential_value) {
       data.credential = {
         header: formData.credential_header,
         format: formData.credential_format,
@@ -420,35 +429,52 @@ export function DomainPolicies() {
 
       {/* Credential */}
       <div>
-        <h3 className="text-sm font-medium text-dark-200 mb-3">
-          Credential Injection {isEdit && editModal?.has_credential && '(leave value empty to keep current)'}
-        </h3>
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="Header Name"
-              placeholder="Authorization"
-              value={formData.credential_header}
-              onChange={(e) => setFormData({ ...formData, credential_header: e.target.value })}
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-dark-200">Credential Injection</h3>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={formData.enable_credential}
+              onChange={(e) => setFormData({ ...formData, enable_credential: e.target.checked })}
+              className="w-4 h-4 rounded border-dark-600 bg-dark-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-dark-800"
             />
-            <Input
-              label="Header Format"
-              placeholder="Bearer {value}"
-              value={formData.credential_format}
-              onChange={(e) => setFormData({ ...formData, credential_format: e.target.value })}
-            />
-          </div>
-          <Input
-            label="Credential Value"
-            type="password"
-            placeholder={isEdit && editModal?.has_credential ? '(unchanged)' : 'sk-...'}
-            value={formData.credential_value}
-            onChange={(e) => setFormData({ ...formData, credential_value: e.target.value })}
-          />
-          <p className="text-xs text-dark-500">
-            Use {'{value}'} in header format to insert the credential. Leave empty for no credential injection.
-          </p>
+            <span className="text-sm text-dark-400">Enable</span>
+          </label>
         </div>
+        {formData.enable_credential && (
+          <div className="space-y-4 p-4 bg-dark-900/50 rounded-lg border border-dark-700">
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Header Name"
+                placeholder="Authorization"
+                value={formData.credential_header}
+                onChange={(e) => setFormData({ ...formData, credential_header: e.target.value })}
+              />
+              <Input
+                label="Header Format"
+                placeholder="Bearer {value}"
+                value={formData.credential_format}
+                onChange={(e) => setFormData({ ...formData, credential_format: e.target.value })}
+              />
+            </div>
+            <Input
+              label="Credential Value"
+              type="password"
+              placeholder={isEdit && editModal?.has_credential ? '(unchanged)' : 'sk-...'}
+              value={formData.credential_value}
+              onChange={(e) => setFormData({ ...formData, credential_value: e.target.value })}
+            />
+            <p className="text-xs text-dark-500">
+              Use {'{value}'} in header format to insert the credential.
+              {isEdit && editModal?.has_credential && ' Leave value empty to keep current credential.'}
+            </p>
+          </div>
+        )}
+        {!formData.enable_credential && (
+          <p className="text-xs text-dark-500">
+            Enable to automatically inject credentials into requests to this domain.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -456,13 +482,23 @@ export function DomainPolicies() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-dark-100">Domain Policies</h1>
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-blue-600/20 rounded-lg">
+            <Globe className="text-blue-400" size={24} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-dark-100">Domain Policies</h1>
+            <p className="text-dark-400 text-sm mt-1">
+              Configure access, rate limits, and credentials for external domains
+            </p>
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           <Button variant="secondary" onClick={() => refetch()}>
             <RefreshCw size={16} className="mr-2" />
             Refresh
           </Button>
-          <Button onClick={() => setCreateModal(true)}>
+          <Button onClick={() => setCreateModal(true)} disabled={!selectedTenantId}>
             <Plus size={16} className="mr-2" />
             New Policy
           </Button>
@@ -470,8 +506,10 @@ export function DomainPolicies() {
       </div>
 
       <Card>
-        {isLoading ? (
-          <div className="text-center py-8 text-dark-400">Loading...</div>
+        {isLoading || !selectedTenantId ? (
+          <div className="text-center py-8 text-dark-400">
+            {selectedTenantId ? 'Loading...' : 'Select a tenant to view domain policies'}
+          </div>
         ) : policies.length > 0 ? (
           <Table
             columns={columns}
@@ -497,6 +535,7 @@ export function DomainPolicies() {
           resetForm();
         }}
         title="Create Domain Policy"
+        size="lg"
       >
         {renderFormFields(false)}
         <div className="flex justify-end gap-2 pt-6">
@@ -526,6 +565,7 @@ export function DomainPolicies() {
           resetForm();
         }}
         title="Edit Domain Policy"
+        size="lg"
       >
         {renderFormFields(true)}
         <div className="flex justify-end gap-2 pt-6">

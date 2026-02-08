@@ -29,399 +29,310 @@ class TestHealthEndpoints:
 class TestAuthentication:
     """Test authentication requirements."""
 
-    def test_secrets_requires_auth(self, client):
-        """Secrets endpoint should require authentication."""
-        response = client.get("/api/v1/secrets")
+    def test_domain_policies_requires_auth(self, client):
+        """Domain policies endpoint should require authentication."""
+        response = client.get("/api/v1/domain-policies")
         assert response.status_code == 401
 
-    def test_secrets_rejects_invalid_token(self, client):
-        """Secrets endpoint should reject invalid tokens."""
+    def test_domain_policies_rejects_invalid_token(self, client):
+        """Domain policies endpoint should reject invalid tokens."""
         response = client.get(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers={"Authorization": "Bearer invalid-token"}
         )
         assert response.status_code == 403
 
-    def test_secrets_accepts_valid_token(self, client, auth_headers):
-        """Secrets endpoint should accept valid tokens."""
-        response = client.get("/api/v1/secrets", headers=auth_headers)
+    def test_domain_policies_accepts_valid_token(self, client, auth_headers):
+        """Domain policies endpoint should accept valid tokens."""
+        response = client.get("/api/v1/domain-policies", headers=auth_headers)
         assert response.status_code == 200
 
 
-class TestSecrets:
-    """Test secret management endpoints."""
+class TestDomainPolicies:
+    """Test domain policy management endpoints."""
 
-    def test_create_secret(self, client, auth_headers):
-        """Should create a new domain-scoped secret."""
+    def test_create_domain_policy(self, client, auth_headers):
+        """Should create a new domain policy."""
         response = client.post(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "name": "OPENAI_API_KEY",
-                "value": "sk-test-key-12345",
-                "domain_pattern": "api.openai.com",
-                "header_name": "Authorization",
-                "header_format": "Bearer {value}",
-                "description": "Test OpenAI key"
+                "domain": "api.newservice.com",
+                "alias": "newservice",
+                "description": "New service API access",
+                "requests_per_minute": 60,
+                "burst_size": 10,
             }
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "created"
-        assert data["name"] == "OPENAI_API_KEY"
-        assert data["domain_pattern"] == "api.openai.com"
+        assert data["domain"] == "api.newservice.com"
+        assert data["alias"] == "newservice"
+        assert data["requests_per_minute"] == 60
+        assert data["enabled"] is True
 
-    def test_create_duplicate_secret_fails(self, client, auth_headers):
-        """Should reject duplicate secret names."""
-        secret_data = {
-            "name": "DUPLICATE_KEY",
-            "value": "value1",
-            "domain_pattern": "example.com",
+    def test_create_domain_policy_with_paths(self, client, auth_headers):
+        """Should create domain policy with path restrictions."""
+        response = client.post(
+            "/api/v1/domain-policies",
+            headers=auth_headers,
+            json={
+                "domain": "api.example.com",
+                "allowed_paths": ["/v1/chat/*", "/v1/models"],
+            }
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["allowed_paths"] == ["/v1/chat/*", "/v1/models"]
+
+    def test_create_domain_policy_with_credential(self, client, auth_headers):
+        """Should create domain policy with credential injection."""
+        response = client.post(
+            "/api/v1/domain-policies",
+            headers=auth_headers,
+            json={
+                "domain": "api.secret.com",
+                "credential": {
+                    "header": "Authorization",
+                    "format": "Bearer {value}",
+                    "value": "sk-test-key-12345",
+                },
+            }
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["has_credential"] is True
+        assert data["credential_header"] == "Authorization"
+        assert data["credential_format"] == "Bearer {value}"
+
+    def test_create_duplicate_domain_policy_fails(self, client, auth_headers):
+        """Should reject duplicate domain (same domain + agent_id)."""
+        policy_data = {
+            "domain": "duplicate.example.com",
+            "requests_per_minute": 60,
         }
         # Create first
-        response = client.post("/api/v1/secrets", headers=auth_headers, json=secret_data)
+        response = client.post("/api/v1/domain-policies", headers=auth_headers, json=policy_data)
         assert response.status_code == 200
 
         # Duplicate should fail
-        response = client.post("/api/v1/secrets", headers=auth_headers, json=secret_data)
+        response = client.post("/api/v1/domain-policies", headers=auth_headers, json=policy_data)
         assert response.status_code == 400
         assert "already exists" in response.json()["detail"]
 
-    def test_list_secrets(self, client, auth_headers):
-        """Should list secrets without exposing values."""
-        # Create a secret first
+    def test_list_domain_policies(self, client, auth_headers):
+        """Should list all domain policies."""
+        # Create a policy
         client.post(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers=auth_headers,
-            json={
-                "name": "LIST_TEST_KEY",
-                "value": "secret-value",
-                "domain_pattern": "test.com",
-            }
+            json={"domain": "list-test.example.com"}
         )
 
-        response = client.get("/api/v1/secrets", headers=auth_headers)
+        response = client.get("/api/v1/domain-policies", headers=auth_headers)
         assert response.status_code == 200
-        secrets = response.json()
-        assert len(secrets) >= 1
+        policies = response.json()
+        assert len(policies) >= 1
 
-        # Find our secret
-        secret = next((s for s in secrets if s["name"] == "LIST_TEST_KEY"), None)
-        assert secret is not None
-        assert secret["domain_pattern"] == "test.com"
-        assert "value" not in secret  # Value should not be exposed
-        assert "encrypted_value" not in secret
+        # Find our policy
+        policy = next((p for p in policies if p["domain"] == "list-test.example.com"), None)
+        assert policy is not None
 
-    def test_get_secret_value(self, client, auth_headers):
-        """Should retrieve decrypted secret value by name."""
-        # Create secret
-        client.post(
-            "/api/v1/secrets",
+    def test_update_domain_policy(self, client, auth_headers):
+        """Should update domain policy."""
+        # Create policy
+        create_response = client.post(
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "name": "VALUE_TEST_KEY",
-                "value": "my-secret-value",
-                "domain_pattern": "test.com",
+                "domain": "update-test.example.com",
+                "requests_per_minute": 60,
             }
         )
+        policy_id = create_response.json()["id"]
 
-        response = client.get("/api/v1/secrets/VALUE_TEST_KEY/value", headers=auth_headers)
+        # Update
+        response = client.put(
+            f"/api/v1/domain-policies/{policy_id}",
+            headers=auth_headers,
+            json={
+                "requests_per_minute": 120,
+                "burst_size": 25,
+                "description": "Updated description",
+            }
+        )
         assert response.status_code == 200
         data = response.json()
-        assert data["name"] == "VALUE_TEST_KEY"
-        assert data["value"] == "my-secret-value"
+        assert data["requests_per_minute"] == 120
+        assert data["burst_size"] == 25
+        assert data["description"] == "Updated description"
 
-    def test_get_secret_value_not_found(self, client, auth_headers):
-        """Should return 404 for non-existent secret."""
-        response = client.get("/api/v1/secrets/NONEXISTENT/value", headers=auth_headers)
-        assert response.status_code == 404
+    def test_disable_domain_policy(self, client, auth_headers):
+        """Should disable domain policy."""
+        # Create policy
+        create_response = client.post(
+            "/api/v1/domain-policies",
+            headers=auth_headers,
+            json={"domain": "disable-test.example.com"}
+        )
+        policy_id = create_response.json()["id"]
 
-    def test_rotate_secret(self, client, auth_headers):
-        """Should rotate secret with new value."""
-        # Create secret
-        client.post(
-            "/api/v1/secrets",
+        # Disable
+        response = client.put(
+            f"/api/v1/domain-policies/{policy_id}",
+            headers=auth_headers,
+            json={"enabled": False}
+        )
+        assert response.status_code == 200
+        assert response.json()["enabled"] is False
+
+    def test_delete_domain_policy(self, client, auth_headers):
+        """Should delete domain policy."""
+        # Create policy
+        create_response = client.post(
+            "/api/v1/domain-policies",
+            headers=auth_headers,
+            json={"domain": "delete-test.example.com"}
+        )
+        policy_id = create_response.json()["id"]
+
+        # Delete
+        response = client.delete(f"/api/v1/domain-policies/{policy_id}", headers=auth_headers)
+        assert response.status_code == 200
+
+        # Verify deleted
+        list_response = client.get("/api/v1/domain-policies", headers=auth_headers)
+        policies = list_response.json()
+        assert not any(p["domain"] == "delete-test.example.com" for p in policies)
+
+    def test_rotate_credential(self, client, auth_headers):
+        """Should rotate domain policy credential."""
+        # Create policy with credential
+        create_response = client.post(
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "name": "ROTATE_TEST_KEY",
-                "value": "old-value",
-                "domain_pattern": "test.com",
+                "domain": "rotate-cred.example.com",
+                "credential": {
+                    "header": "Authorization",
+                    "format": "Bearer {value}",
+                    "value": "old-secret",
+                },
             }
         )
+        policy_id = create_response.json()["id"]
 
         # Rotate
         response = client.post(
-            "/api/v1/secrets/ROTATE_TEST_KEY/rotate",
+            f"/api/v1/domain-policies/{policy_id}/rotate-credential",
             headers=auth_headers,
-            json={"new_value": "new-value"}
+            json={
+                "header": "Authorization",
+                "format": "Bearer {value}",
+                "value": "new-secret",
+            }
         )
         assert response.status_code == 200
-        assert response.json()["status"] == "rotated"
+        assert response.json()["has_credential"] is True
 
-        # Verify new value
-        response = client.get("/api/v1/secrets/ROTATE_TEST_KEY/value", headers=auth_headers)
-        assert response.json()["value"] == "new-value"
 
-    def test_delete_secret(self, client, auth_headers):
-        """Should delete a secret."""
-        # Create secret
+class TestDomainPolicyLookup:
+    """Test domain-based policy lookup (for-domain endpoint)."""
+
+    def test_get_policy_for_exact_domain(self, client, auth_headers):
+        """Should match exact domain."""
+        # Create policy
         client.post(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "name": "DELETE_TEST_KEY",
-                "value": "delete-me",
-                "domain_pattern": "test.com",
+                "domain": "exact-lookup.example.com",
+                "requests_per_minute": 45,
+                "burst_size": 8,
+                "credential": {
+                    "header": "Authorization",
+                    "format": "Bearer {value}",
+                    "value": "exact-secret",
+                },
             }
         )
 
-        # Delete
-        response = client.delete("/api/v1/secrets/DELETE_TEST_KEY", headers=auth_headers)
-        assert response.status_code == 200
-        assert response.json()["status"] == "deleted"
-
-        # Verify deleted
-        response = client.get("/api/v1/secrets/DELETE_TEST_KEY/value", headers=auth_headers)
-        assert response.status_code == 404
-
-    def test_delete_secret_not_found(self, client, auth_headers):
-        """Should return 404 when deleting non-existent secret."""
-        response = client.delete("/api/v1/secrets/NONEXISTENT_KEY", headers=auth_headers)
-        assert response.status_code == 404
-
-
-class TestDomainScopedCredentials:
-    """Test domain-based credential lookup."""
-
-    def test_create_secret_with_alias(self, client, auth_headers):
-        """Should create secret with devbox.local alias."""
-        response = client.post(
-            "/api/v1/secrets",
-            headers=auth_headers,
-            json={
-                "name": "ALIASED_SECRET",
-                "value": "test-value",
-                "domain_pattern": "api.example.com",
-                "alias": "example",
-                "header_name": "Authorization",
-                "header_format": "Bearer {value}",
-            }
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["alias"] == "example"
-        assert data["devbox_url"] == "http://example.devbox.local"
-
-    def test_get_credential_for_devbox_alias(self, client, auth_headers):
-        """Should resolve devbox.local alias to real domain and return credentials."""
-        # Create secret with alias
-        client.post(
-            "/api/v1/secrets",
-            headers=auth_headers,
-            json={
-                "name": "ALIAS_LOOKUP_KEY",
-                "value": "alias-secret-value",
-                "domain_pattern": "api.testservice.com",
-                "alias": "testservice",
-                "header_name": "Authorization",
-                "header_format": "Bearer {value}",
-            }
-        )
-
-        # Query using devbox.local alias
         response = client.get(
-            "/api/v1/secrets/for-domain?domain=testservice.devbox.local",
+            "/api/v1/domain-policies/for-domain?domain=exact-lookup.example.com",
             headers=auth_headers
         )
         assert response.status_code == 200
         data = response.json()
         assert data["matched"] is True
-        assert data["name"] == "ALIAS_LOOKUP_KEY"
-        assert data["target_domain"] == "api.testservice.com"
-        assert data["header_name"] == "Authorization"
-        assert data["header_value"] == "Bearer alias-secret-value"
-
-    def test_get_credential_for_devbox_alias_with_wildcard(self, client, auth_headers):
-        """Should strip wildcard prefix when returning target_domain for alias."""
-        # Create secret with alias and wildcard domain pattern
-        client.post(
-            "/api/v1/secrets",
-            headers=auth_headers,
-            json={
-                "name": "WILDCARD_ALIAS_KEY",
-                "value": "wildcard-alias-secret",
-                "domain_pattern": "*.github.com",
-                "alias": "github",
-                "header_name": "Authorization",
-                "header_format": "token {value}",
-            }
-        )
-
-        # Query using devbox.local alias
-        response = client.get(
-            "/api/v1/secrets/for-domain?domain=github.devbox.local",
-            headers=auth_headers
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["matched"] is True
-        # Wildcard should be stripped: *.github.com -> github.com
-        assert data["target_domain"] == "github.com"
-        assert data["header_value"] == "token wildcard-alias-secret"
-
-    def test_get_credential_for_unknown_devbox_alias(self, client, auth_headers):
-        """Should return no match for unknown devbox.local alias."""
-        response = client.get(
-            "/api/v1/secrets/for-domain?domain=unknown.devbox.local",
-            headers=auth_headers
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["matched"] is False
-
-    def test_get_credential_for_exact_domain(self, client, auth_headers):
-        """Should match exact domain pattern."""
-        # Create secret
-        client.post(
-            "/api/v1/secrets",
-            headers=auth_headers,
-            json={
-                "name": "EXACT_DOMAIN_KEY",
-                "value": "exact-secret",
-                "domain_pattern": "api.openai.com",
-                "header_name": "Authorization",
-                "header_format": "Bearer {value}",
-            }
-        )
-
-        response = client.get(
-            "/api/v1/secrets/for-domain?domain=api.openai.com",
-            headers=auth_headers
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["matched"] is True
-        assert data["name"] == "EXACT_DOMAIN_KEY"
+        assert data["requests_per_minute"] == 45
         assert data["header_name"] == "Authorization"
         assert data["header_value"] == "Bearer exact-secret"
 
-    def test_get_credential_for_wildcard_domain(self, client, auth_headers):
+    def test_get_policy_for_wildcard_domain(self, client, auth_headers):
         """Should match wildcard domain pattern."""
-        # Create secret with wildcard
+        # Create policy with wildcard
         client.post(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "name": "WILDCARD_KEY",
-                "value": "wildcard-secret",
-                "domain_pattern": "*.github.com",
-                "header_name": "Authorization",
-                "header_format": "token {value}",
+                "domain": "*.wildcard-lookup.com",
+                "requests_per_minute": 100,
+                "credential": {
+                    "header": "Authorization",
+                    "format": "token {value}",
+                    "value": "wildcard-secret",
+                },
             }
         )
 
-        # Should match api.github.com
+        # Should match api.wildcard-lookup.com
         response = client.get(
-            "/api/v1/secrets/for-domain?domain=api.github.com",
+            "/api/v1/domain-policies/for-domain?domain=api.wildcard-lookup.com",
             headers=auth_headers
         )
         assert response.status_code == 200
         data = response.json()
         assert data["matched"] is True
+        assert data["requests_per_minute"] == 100
         assert data["header_value"] == "token wildcard-secret"
 
-        # Should match raw.github.com
+    def test_get_policy_for_alias(self, client, auth_headers):
+        """Should resolve devbox.local alias to real domain."""
+        # Create policy with alias
+        client.post(
+            "/api/v1/domain-policies",
+            headers=auth_headers,
+            json={
+                "domain": "api.aliased.com",
+                "alias": "myservice",
+                "credential": {
+                    "header": "Authorization",
+                    "format": "Bearer {value}",
+                    "value": "alias-secret",
+                },
+            }
+        )
+
+        # Query using devbox.local alias
         response = client.get(
-            "/api/v1/secrets/for-domain?domain=raw.github.com",
+            "/api/v1/domain-policies/for-domain?domain=myservice.devbox.local",
             headers=auth_headers
         )
         assert response.status_code == 200
-        assert response.json()["matched"] is True
+        data = response.json()
+        assert data["matched"] is True
+        assert data["target_domain"] == "api.aliased.com"
+        assert data["header_value"] == "Bearer alias-secret"
 
     def test_no_match_for_unknown_domain(self, client, auth_headers):
         """Should return no match for unknown domains."""
         response = client.get(
-            "/api/v1/secrets/for-domain?domain=unknown.example.com",
+            "/api/v1/domain-policies/for-domain?domain=unknown.example.com",
             headers=auth_headers
         )
         assert response.status_code == 200
         data = response.json()
         assert data["matched"] is False
-
-
-class TestAllowlist:
-    """Test allowlist management endpoints."""
-
-    def test_create_allowlist_entry(self, client, auth_headers):
-        """Should create a new allowlist entry."""
-        response = client.post(
-            "/api/v1/allowlist",
-            headers=auth_headers,
-            json={
-                "entry_type": "domain",
-                "value": "api.openai.com",
-                "description": "OpenAI API"
-            }
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["entry_type"] == "domain"
-        assert data["value"] == "api.openai.com"
-        assert data["enabled"] is True
-
-    def test_list_allowlist_entries(self, client, auth_headers):
-        """Should list all allowlist entries."""
-        # Create entry
-        client.post(
-            "/api/v1/allowlist",
-            headers=auth_headers,
-            json={"entry_type": "domain", "value": "test.com"}
-        )
-
-        response = client.get("/api/v1/allowlist", headers=auth_headers)
-        assert response.status_code == 200
-        entries = response.json()
-        assert len(entries) >= 1
-
-    def test_filter_allowlist_by_type(self, client, auth_headers):
-        """Should filter allowlist by entry type."""
-        # Create domain entry
-        client.post(
-            "/api/v1/allowlist",
-            headers=auth_headers,
-            json={"entry_type": "domain", "value": "domain.com"}
-        )
-        # Create IP entry
-        client.post(
-            "/api/v1/allowlist",
-            headers=auth_headers,
-            json={"entry_type": "ip", "value": "192.168.1.1"}
-        )
-
-        # Filter by domain
-        response = client.get("/api/v1/allowlist?entry_type=domain", headers=auth_headers)
-        assert response.status_code == 200
-        entries = response.json()
-        assert all(e["entry_type"] == "domain" for e in entries)
-
-    def test_delete_allowlist_entry(self, client, auth_headers):
-        """Should delete allowlist entry."""
-        # Create entry
-        create_response = client.post(
-            "/api/v1/allowlist",
-            headers=auth_headers,
-            json={"entry_type": "domain", "value": "delete-me.com"}
-        )
-        entry_id = create_response.json()["id"]
-
-        # Delete
-        response = client.delete(f"/api/v1/allowlist/{entry_id}", headers=auth_headers)
-        assert response.status_code == 200
-
-        # Verify deleted
-        list_response = client.get("/api/v1/allowlist", headers=auth_headers)
-        entries = list_response.json()
-        assert not any(e["value"] == "delete-me.com" for e in entries)
 
 
 class TestAuditLogs:
@@ -627,195 +538,6 @@ class TestDataPlaneManagement:
         assert "already pending" in response.json()["detail"]
 
 
-class TestRateLimits:
-    """Test rate limit management endpoints."""
-
-    def test_create_rate_limit(self, client, auth_headers):
-        """Should create a new rate limit configuration."""
-        response = client.post(
-            "/api/v1/rate-limits",
-            headers=auth_headers,
-            json={
-                "domain_pattern": "api.openai.com",
-                "requests_per_minute": 60,
-                "burst_size": 10,
-                "description": "OpenAI rate limit"
-            }
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["domain_pattern"] == "api.openai.com"
-        assert data["requests_per_minute"] == 60
-        assert data["burst_size"] == 10
-        assert data["enabled"] is True
-
-    def test_create_duplicate_rate_limit_fails(self, client, auth_headers):
-        """Should reject duplicate domain patterns."""
-        rate_limit_data = {
-            "domain_pattern": "duplicate.example.com",
-            "requests_per_minute": 100,
-        }
-        # Create first
-        response = client.post("/api/v1/rate-limits", headers=auth_headers, json=rate_limit_data)
-        assert response.status_code == 200
-
-        # Duplicate should fail
-        response = client.post("/api/v1/rate-limits", headers=auth_headers, json=rate_limit_data)
-        assert response.status_code == 400
-        assert "already exists" in response.json()["detail"]
-
-    def test_list_rate_limits(self, client, auth_headers):
-        """Should list all rate limit configurations."""
-        # Create a rate limit
-        client.post(
-            "/api/v1/rate-limits",
-            headers=auth_headers,
-            json={
-                "domain_pattern": "list-test.example.com",
-                "requests_per_minute": 30,
-            }
-        )
-
-        response = client.get("/api/v1/rate-limits", headers=auth_headers)
-        assert response.status_code == 200
-        rate_limits = response.json()
-        assert len(rate_limits) >= 1
-
-        # Find our rate limit
-        rl = next((r for r in rate_limits if r["domain_pattern"] == "list-test.example.com"), None)
-        assert rl is not None
-        assert rl["requests_per_minute"] == 30
-
-    def test_update_rate_limit(self, client, auth_headers):
-        """Should update rate limit configuration."""
-        # Create rate limit
-        create_response = client.post(
-            "/api/v1/rate-limits",
-            headers=auth_headers,
-            json={
-                "domain_pattern": "update-test.example.com",
-                "requests_per_minute": 60,
-            }
-        )
-        rate_limit_id = create_response.json()["id"]
-
-        # Update
-        response = client.put(
-            f"/api/v1/rate-limits/{rate_limit_id}",
-            headers=auth_headers,
-            json={
-                "requests_per_minute": 120,
-                "burst_size": 25
-            }
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["requests_per_minute"] == 120
-        assert data["burst_size"] == 25
-
-    def test_disable_rate_limit(self, client, auth_headers):
-        """Should disable rate limit."""
-        # Create rate limit
-        create_response = client.post(
-            "/api/v1/rate-limits",
-            headers=auth_headers,
-            json={
-                "domain_pattern": "disable-test.example.com",
-                "requests_per_minute": 60,
-            }
-        )
-        rate_limit_id = create_response.json()["id"]
-
-        # Disable
-        response = client.put(
-            f"/api/v1/rate-limits/{rate_limit_id}",
-            headers=auth_headers,
-            json={"enabled": False}
-        )
-        assert response.status_code == 200
-        assert response.json()["enabled"] is False
-
-    def test_delete_rate_limit(self, client, auth_headers):
-        """Should delete rate limit configuration."""
-        # Create rate limit
-        create_response = client.post(
-            "/api/v1/rate-limits",
-            headers=auth_headers,
-            json={
-                "domain_pattern": "delete-test.example.com",
-                "requests_per_minute": 60,
-            }
-        )
-        rate_limit_id = create_response.json()["id"]
-
-        # Delete
-        response = client.delete(f"/api/v1/rate-limits/{rate_limit_id}", headers=auth_headers)
-        assert response.status_code == 200
-
-        # Verify deleted
-        list_response = client.get("/api/v1/rate-limits", headers=auth_headers)
-        rate_limits = list_response.json()
-        assert not any(r["domain_pattern"] == "delete-test.example.com" for r in rate_limits)
-
-    def test_get_rate_limit_for_exact_domain(self, client, auth_headers):
-        """Should match exact domain pattern for rate limit."""
-        # Create rate limit
-        client.post(
-            "/api/v1/rate-limits",
-            headers=auth_headers,
-            json={
-                "domain_pattern": "exact-rate.example.com",
-                "requests_per_minute": 45,
-                "burst_size": 8,
-            }
-        )
-
-        response = client.get(
-            "/api/v1/rate-limits/for-domain?domain=exact-rate.example.com",
-            headers=auth_headers
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["matched"] is True
-        assert data["requests_per_minute"] == 45
-        assert data["burst_size"] == 8
-
-    def test_get_rate_limit_for_wildcard_domain(self, client, auth_headers):
-        """Should match wildcard domain pattern for rate limit."""
-        # Create rate limit with wildcard
-        client.post(
-            "/api/v1/rate-limits",
-            headers=auth_headers,
-            json={
-                "domain_pattern": "*.wildcard-rate.com",
-                "requests_per_minute": 100,
-                "burst_size": 15,
-            }
-        )
-
-        response = client.get(
-            "/api/v1/rate-limits/for-domain?domain=api.wildcard-rate.com",
-            headers=auth_headers
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["matched"] is True
-        assert data["requests_per_minute"] == 100
-
-    def test_get_default_rate_limit_for_unknown_domain(self, client, auth_headers):
-        """Should return default rate limit for unknown domains."""
-        response = client.get(
-            "/api/v1/rate-limits/for-domain?domain=unknown-rate.example.com",
-            headers=auth_headers
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["matched"] is False
-        # Should have default values
-        assert "requests_per_minute" in data
-        assert "burst_size" in data
-
-
 class TestApiTokens:
     """Test API token management endpoints."""
 
@@ -978,7 +700,7 @@ class TestApiTokens:
 
         # Use the new token
         response = client.get(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers={"Authorization": f"Bearer {raw_token}"}
         )
         assert response.status_code == 200
@@ -1101,166 +823,138 @@ class TestAgentApproval:
         assert response.json()["command"] == "restart"
 
 
-class TestPerAgentConfiguration:
-    """Test per-agent configuration (agent-scoped secrets, allowlist, rate limits)."""
+class TestPerAgentDomainPolicies:
+    """Test per-agent domain policy configuration."""
 
-    def test_create_agent_scoped_allowlist_entry(self, client, auth_headers):
-        """Should create allowlist entry scoped to a specific agent."""
+    def test_create_agent_scoped_policy(self, client, auth_headers):
+        """Should create domain policy scoped to a specific agent."""
         response = client.post(
-            "/api/v1/allowlist",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "entry_type": "domain",
-                "value": "agent-specific.example.com",
+                "domain": "agent-specific.example.com",
                 "description": "Agent-specific domain",
-                "agent_id": "scoped-agent"
+                "agent_id": "scoped-agent",
             }
         )
         assert response.status_code == 200
         data = response.json()
         assert data["agent_id"] == "scoped-agent"
 
-    def test_create_agent_scoped_secret(self, client, auth_headers):
-        """Should create secret scoped to a specific agent."""
-        response = client.post(
-            "/api/v1/secrets",
-            headers=auth_headers,
-            json={
-                "name": "AGENT_SPECIFIC_KEY",
-                "value": "secret-value",
-                "domain_pattern": "agent-specific.example.com",
-                "header_name": "Authorization",
-                "header_format": "Bearer {value}",
-                "agent_id": "scoped-agent"
-            }
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["agent_id"] == "scoped-agent"
-
-    def test_create_agent_scoped_rate_limit(self, client, auth_headers):
-        """Should create rate limit scoped to a specific agent."""
-        response = client.post(
-            "/api/v1/rate-limits",
-            headers=auth_headers,
-            json={
-                "domain_pattern": "agent-specific-rl.example.com",
-                "requests_per_minute": 30,
-                "burst_size": 5,
-                "description": "Agent-specific rate limit",
-                "agent_id": "scoped-agent"
-            }
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["agent_id"] == "scoped-agent"
-
-    def test_list_allowlist_with_agent_id_filter(self, client, auth_headers):
-        """Should filter allowlist entries by agent_id."""
-        # Create global entry
+    def test_filter_policies_by_agent_id(self, client, auth_headers):
+        """Should filter domain policies by agent_id."""
+        # Create global policy
         client.post(
-            "/api/v1/allowlist",
+            "/api/v1/domain-policies",
             headers=auth_headers,
-            json={
-                "entry_type": "domain",
-                "value": "global-filter.example.com",
-                "description": "Global entry"
-            }
+            json={"domain": "global-filter.example.com"}
         )
-        # Create agent-specific entry
+        # Create agent-specific policy
         client.post(
-            "/api/v1/allowlist",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "entry_type": "domain",
-                "value": "filter-agent.example.com",
-                "description": "Agent-specific entry",
-                "agent_id": "filter-agent"
+                "domain": "filter-agent.example.com",
+                "agent_id": "filter-agent",
             }
         )
 
         # List with agent_id filter
-        response = client.get("/api/v1/allowlist?agent_id=filter-agent", headers=auth_headers)
+        response = client.get("/api/v1/domain-policies?agent_id=filter-agent", headers=auth_headers)
         assert response.status_code == 200
-        entries = response.json()
-        # Should only include filter-agent entries
-        for entry in entries:
-            assert entry.get("agent_id") == "filter-agent" or entry.get("agent_id") is None
+        policies = response.json()
+        # Should only include filter-agent policies
+        for policy in policies:
+            assert policy.get("agent_id") == "filter-agent" or policy.get("agent_id") is None
 
-    def test_agent_token_sees_only_own_and_global_secrets(self, client, auth_headers):
-        """Agent token should see its own secrets plus global secrets, not other agents' secrets."""
+    def test_agent_token_sees_own_and_global_policies(self, client, auth_headers):
+        """Agent token should see its own policies plus global policies."""
         # Create agent and get a token for it
         client.post(
             "/api/v1/agent/heartbeat",
             headers=auth_headers,
-            json={"agent_id": "secret-test-agent", "status": "running"}
+            json={"agent_id": "policy-test-agent", "status": "running"}
         )
 
         # Create agent token
         token_response = client.post(
             "/api/v1/tokens",
             headers=auth_headers,
-            json={"name": "secret-test-token", "token_type": "agent", "agent_id": "secret-test-agent"}
+            json={"name": "policy-test-token", "token_type": "agent", "agent_id": "policy-test-agent"}
         )
         agent_token = token_response.json()["token"]
         agent_headers = {"Authorization": f"Bearer {agent_token}"}
 
-        # Create global secret
+        # Create global policy with credential
         client.post(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "name": "GLOBAL_SECRET_TEST",
-                "value": "global-value",
-                "domain_pattern": "global.example.com",
-                "header_name": "X-API-Key",
-                "header_format": "{value}"
+                "domain": "global-policy.example.com",
+                "credential": {
+                    "header": "X-API-Key",
+                    "format": "{value}",
+                    "value": "global-value",
+                },
             }
         )
 
-        # Create agent-specific secret
+        # Create agent-specific policy with credential
         client.post(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "name": "AGENT_SECRET_TEST",
-                "value": "agent-value",
-                "domain_pattern": "agent-only.example.com",
-                "header_name": "X-API-Key",
-                "header_format": "{value}",
-                "agent_id": "secret-test-agent"
+                "domain": "agent-policy.example.com",
+                "agent_id": "policy-test-agent",
+                "credential": {
+                    "header": "X-API-Key",
+                    "format": "{value}",
+                    "value": "agent-value",
+                },
             }
         )
 
-        # Create secret for different agent
+        # Create policy for different agent
         client.post(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "name": "OTHER_AGENT_SECRET",
-                "value": "other-value",
-                "domain_pattern": "other.example.com",
-                "header_name": "X-API-Key",
-                "header_format": "{value}",
-                "agent_id": "other-agent"
+                "domain": "other-policy.example.com",
+                "agent_id": "other-agent",
+                "credential": {
+                    "header": "X-API-Key",
+                    "format": "{value}",
+                    "value": "other-value",
+                },
             }
         )
 
-        # Agent token should see global + own secrets, not other agent's
-        response = client.get("/api/v1/secrets/for-domain?domain=global.example.com", headers=agent_headers)
+        # Agent should see global policy
+        response = client.get(
+            "/api/v1/domain-policies/for-domain?domain=global-policy.example.com",
+            headers=agent_headers
+        )
         assert response.status_code == 200
         assert response.json()["matched"] is True
 
-        response = client.get("/api/v1/secrets/for-domain?domain=agent-only.example.com", headers=agent_headers)
+        # Agent should see its own policy
+        response = client.get(
+            "/api/v1/domain-policies/for-domain?domain=agent-policy.example.com",
+            headers=agent_headers
+        )
         assert response.status_code == 200
         assert response.json()["matched"] is True
 
-        response = client.get("/api/v1/secrets/for-domain?domain=other.example.com", headers=agent_headers)
+        # Agent should NOT see other agent's policy
+        response = client.get(
+            "/api/v1/domain-policies/for-domain?domain=other-policy.example.com",
+            headers=agent_headers
+        )
         assert response.status_code == 200
-        assert response.json()["matched"] is False  # Should NOT match other agent's secret
+        assert response.json()["matched"] is False
 
-    def test_agent_specific_secret_takes_precedence(self, client, auth_headers):
-        """Agent-specific secrets should take precedence over global secrets."""
+    def test_agent_specific_policy_takes_precedence(self, client, auth_headers):
+        """Agent-specific policies should take precedence over global policies."""
         # Create agent and get a token for it
         client.post(
             "/api/v1/agent/heartbeat",
@@ -1275,98 +969,57 @@ class TestPerAgentConfiguration:
         agent_token = token_response.json()["token"]
         agent_headers = {"Authorization": f"Bearer {agent_token}"}
 
-        # Create global secret
+        # Create global policy
         client.post(
-            "/api/v1/secrets",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "name": "PRECEDENCE_GLOBAL",
-                "value": "global-key",
-                "domain_pattern": "precedence.example.com",
-                "header_name": "X-API-Key",
-                "header_format": "{value}"
-            }
-        )
-
-        # Create agent-specific secret for same domain
-        client.post(
-            "/api/v1/secrets",
-            headers=auth_headers,
-            json={
-                "name": "PRECEDENCE_AGENT",
-                "value": "agent-key",
-                "domain_pattern": "precedence.example.com",
-                "header_name": "X-API-Key",
-                "header_format": "{value}",
-                "agent_id": "precedence-agent"
-            }
-        )
-
-        # Agent should get agent-specific secret (takes precedence)
-        response = client.get("/api/v1/secrets/for-domain?domain=precedence.example.com", headers=agent_headers)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["matched"] is True
-        assert data["header_value"] == "agent-key"  # Agent-specific key, not global
-
-    def test_agent_specific_rate_limit_takes_precedence(self, client, auth_headers):
-        """Agent-specific rate limits should take precedence over global rate limits."""
-        # Create agent and get a token for it
-        client.post(
-            "/api/v1/agent/heartbeat",
-            headers=auth_headers,
-            json={"agent_id": "rl-precedence-agent", "status": "running"}
-        )
-        token_response = client.post(
-            "/api/v1/tokens",
-            headers=auth_headers,
-            json={"name": "rl-precedence-token", "token_type": "agent", "agent_id": "rl-precedence-agent"}
-        )
-        agent_token = token_response.json()["token"]
-        agent_headers = {"Authorization": f"Bearer {agent_token}"}
-
-        # Create global rate limit
-        client.post(
-            "/api/v1/rate-limits",
-            headers=auth_headers,
-            json={
-                "domain_pattern": "rl-precedence.example.com",
+                "domain": "precedence.example.com",
                 "requests_per_minute": 100,
-                "burst_size": 20,
-                "description": "Global rate limit"
+                "credential": {
+                    "header": "X-API-Key",
+                    "format": "{value}",
+                    "value": "global-key",
+                },
             }
         )
 
-        # Create agent-specific rate limit for same domain
+        # Create agent-specific policy for same domain
         client.post(
-            "/api/v1/rate-limits",
+            "/api/v1/domain-policies",
             headers=auth_headers,
             json={
-                "domain_pattern": "rl-precedence.example.com",
+                "domain": "precedence.example.com",
+                "agent_id": "precedence-agent",
                 "requests_per_minute": 50,
-                "burst_size": 10,
-                "description": "Agent-specific rate limit",
-                "agent_id": "rl-precedence-agent"
+                "credential": {
+                    "header": "X-API-Key",
+                    "format": "{value}",
+                    "value": "agent-key",
+                },
             }
         )
 
-        # Agent should get agent-specific rate limit (takes precedence)
-        response = client.get("/api/v1/rate-limits/for-domain?domain=rl-precedence.example.com", headers=agent_headers)
+        # Agent should get agent-specific policy (takes precedence)
+        response = client.get(
+            "/api/v1/domain-policies/for-domain?domain=precedence.example.com",
+            headers=agent_headers
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["matched"] is True
         assert data["requests_per_minute"] == 50  # Agent-specific, not global 100
+        assert data["header_value"] == "agent-key"  # Agent-specific, not global
 
 
 class TestMultiTenancy:
     """Test multi-tenancy features (tenants, super admin, tenant isolation)."""
 
-    def test_create_tenant_requires_super_admin(self, client, auth_headers):
-        """Regular admin cannot create tenants (only super admin via legacy tokens)."""
-        # Legacy tokens from API_TOKENS are super admin, so this should work
+    def test_create_tenant_requires_super_admin(self, client, super_admin_headers):
+        """Super admin can create tenants."""
         response = client.post(
             "/api/v1/tenants",
-            headers=auth_headers,
+            headers=super_admin_headers,
             json={"name": "Test Tenant", "slug": "test-tenant"}
         )
         assert response.status_code == 200
@@ -1375,43 +1028,43 @@ class TestMultiTenancy:
         assert data["slug"] == "test-tenant"
         assert data["agent_count"] == 1  # __default__ agent
 
-    def test_list_tenants(self, client, auth_headers):
+    def test_list_tenants(self, client, super_admin_headers):
         """Super admin can list all tenants."""
         # Create a tenant first
         client.post(
             "/api/v1/tenants",
-            headers=auth_headers,
+            headers=super_admin_headers,
             json={"name": "List Tenant", "slug": "list-tenant"}
         )
 
-        response = client.get("/api/v1/tenants", headers=auth_headers)
+        response = client.get("/api/v1/tenants", headers=super_admin_headers)
         assert response.status_code == 200
         tenants = response.json()
         assert len(tenants) >= 1
         slugs = [t["slug"] for t in tenants]
         assert "list-tenant" in slugs
 
-    def test_tenant_creates_default_agent(self, client, auth_headers):
+    def test_tenant_creates_default_agent(self, client, super_admin_headers):
         """Creating a tenant also creates __default__ agent for tenant-global config."""
         # Create tenant
         create_response = client.post(
             "/api/v1/tenants",
-            headers=auth_headers,
+            headers=super_admin_headers,
             json={"name": "Default Agent Tenant", "slug": "default-agent-tenant"}
         )
         tenant_id = create_response.json()["id"]
 
         # List agents - __default__ should NOT appear in list (filtered out)
-        list_response = client.get("/api/v1/agents", headers=auth_headers)
+        list_response = client.get("/api/v1/agents", headers=super_admin_headers)
         agent_ids = [a["agent_id"] for a in list_response.json()]
         assert "__default__" not in agent_ids
 
-    def test_delete_tenant(self, client, auth_headers):
+    def test_delete_tenant(self, client, super_admin_headers):
         """Super admin can delete a tenant and all its agents."""
         # Create tenant
         create_response = client.post(
             "/api/v1/tenants",
-            headers=auth_headers,
+            headers=super_admin_headers,
             json={"name": "Delete Me Tenant", "slug": "delete-me-tenant"}
         )
         tenant_id = create_response.json()["id"]
@@ -1419,37 +1072,37 @@ class TestMultiTenancy:
         # Delete tenant
         delete_response = client.delete(
             f"/api/v1/tenants/{tenant_id}",
-            headers=auth_headers
+            headers=super_admin_headers
         )
         assert delete_response.status_code == 200
         assert delete_response.json()["status"] == "deleted"
 
         # Verify tenant is gone
-        get_response = client.get(f"/api/v1/tenants/{tenant_id}", headers=auth_headers)
+        get_response = client.get(f"/api/v1/tenants/{tenant_id}", headers=super_admin_headers)
         assert get_response.status_code == 404
 
-    def test_create_super_admin_token(self, client, auth_headers):
+    def test_create_super_admin_token(self, client, super_admin_headers):
         """Super admin can create another super admin token."""
         response = client.post(
             "/api/v1/tokens",
-            headers=auth_headers,
+            headers=super_admin_headers,
             json={"name": "new-super-admin", "token_type": "admin", "is_super_admin": True}
         )
         assert response.status_code == 200
         data = response.json()
         assert data["is_super_admin"] is True
 
-    def test_duplicate_tenant_slug_fails(self, client, auth_headers):
+    def test_duplicate_tenant_slug_fails(self, client, super_admin_headers):
         """Cannot create tenant with duplicate slug."""
         client.post(
             "/api/v1/tenants",
-            headers=auth_headers,
+            headers=super_admin_headers,
             json={"name": "Unique Tenant", "slug": "unique-slug"}
         )
 
         response = client.post(
             "/api/v1/tenants",
-            headers=auth_headers,
+            headers=super_admin_headers,
             json={"name": "Another Tenant", "slug": "unique-slug"}
         )
         assert response.status_code == 400

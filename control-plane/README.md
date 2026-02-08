@@ -13,7 +13,7 @@ The control plane provides centralized management, policy enforcement, secrets s
 │  │  (React)    │    │     API      │    │  (state)    │        │
 │  └─────────────┘    └──────────────┘    └─────────────┘        │
 │        │                   │                                    │
-│        │                   │ (read logs)                        │
+│        │                   │ (read/write logs)                  │
 │        │                   ▼                                    │
 │        │            ┌─────────────┐                             │
 │        └───────────►│ OpenObserve │                             │
@@ -21,21 +21,20 @@ The control plane provides centralized management, policy enforcement, secrets s
 │                     └─────────────┘                             │
 │                            ▲                                    │
 └────────────────────────────│────────────────────────────────────┘
-                             │ (write logs)
+                             │ (CP forwards logs with trusted identity)
         ┌────────────────────┼────────────────────────────────┐
         │                    │                                │
 ┌───────┴──────┐  ┌──────────┴────┐  ┌───────────────┐
 │ Data Plane 1 │  │ Data Plane 2  │  │ Data Plane N  │
-│   (vector)   │  │   (vector)    │  │   (vector)    │
 │ (agent-mgr)  │  │ (agent-mgr)   │  │ (agent-mgr)   │
 └──────────────┘  └───────────────┘  └───────────────┘
       │                  │                   │
-      └──────── heartbeat/poll (outbound) ───┘
+      └──────── heartbeat/poll + logs (outbound) ───┘
 ```
 
 **Log Flow**:
-- **Write**: Data plane Vector → OpenObserve (direct, port 5080)
-- **Read**: Admin UI → Control Plane API → OpenObserve (proxied queries)
+- **Write**: Data plane → Control Plane API → OpenObserve (CP-mediated for security)
+- **Read**: Admin UI → Control Plane API → OpenObserve (proxied queries with tenant filtering)
 
 **Multi-Data Plane Management**:
 - Each data plane has a unique `agent_id`
@@ -160,12 +159,25 @@ Domain aliases (e.g., `openai.devbox.local` → `api.openai.com`) are configured
 | DELETE | `/api/v1/allowlist/{id}` | Remove allowlist entry |
 | GET | `/api/v1/allowlist/export` | Export allowlist (CoreDNS format) |
 
-### Audit Logs
+### Audit Logs (Admin/CP Operations)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/audit-logs` | Query audit logs |
+| GET | `/api/v1/audit-logs` | Query audit logs (tenant-filtered) |
 | POST | `/api/v1/audit-logs` | Create audit log entry |
+
+### Agent Logs (Data Plane Operations)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/logs/ingest` | Ingest logs from data plane (agent token) |
+| GET | `/api/v1/logs/query` | Query agent logs (tenant-filtered) |
+
+**Log Ingestion Security**:
+- Only agent tokens can ingest logs
+- CP injects trusted `agent_id` and `tenant_id` from the verified token
+- Data planes never have direct access to OpenObserve credentials
+- Prevents identity spoofing (agents cannot claim to be other agents/tenants)
 
 ### Multi-Data Plane Management (Polling-based)
 
@@ -295,17 +307,17 @@ The control plane manages multiple data planes, which can run on different machi
 Data Plane 1                            Control Plane
 ┌─────────────┐                        ┌─────────────┐
 │   Envoy     │ ────── :8002 ───────►  │     API     │
-│   vector    │ ────── :5080 ───────►  │ OpenObserve │
 │agent-manager│ ────── :8002 ───────►  │  (manages)  │
-└─────────────┘   (heartbeat/poll)     │             │
+└─────────────┘   (heartbeat + logs)   │             │
                                        │  Multiple   │
 Data Plane 2                           │   Agents    │
 ┌─────────────┐                        │             │
-│   Envoy     │ ────── :8002 ───────►  │             │
-│   vector    │ ────── :5080 ───────►  │             │
-│agent-manager│ ────── :8002 ───────►  │             │
-└─────────────┘   (heartbeat/poll)     └─────────────┘
+│   Envoy     │ ────── :8002 ───────►  │     ▼       │
+│agent-manager│ ────── :8002 ───────►  │ OpenObserve │
+└─────────────┘   (heartbeat + logs)   └─────────────┘
 ```
+
+Logs are sent to the Control Plane API (`/api/v1/logs/ingest`), which injects trusted `agent_id` and `tenant_id` before forwarding to OpenObserve. Data planes never have direct access to OpenObserve credentials.
 
 All connections are outbound from data planes - no inbound ports needed on data planes.
 
@@ -314,9 +326,10 @@ All connections are outbound from data planes - no inbound ports needed on data 
 | From | To | Port | Purpose |
 |------|-----|------|---------|
 | Data plane (Envoy) | Control plane | 8002 | Credential/rate-limit lookups |
-| Data plane (agent-manager) | Control plane | 8002 | Heartbeat polling |
-| Data plane (vector) | Control plane | 5080 | Log shipping to OpenObserve |
+| Data plane (agent-manager) | Control plane | 8002 | Heartbeat polling + log ingestion |
 | Data plane (frpc) | Control plane | 7000 | STCP tunnel for terminal |
+
+Note: Logs are shipped via the Control Plane API (port 8002), not directly to OpenObserve. This ensures agent identity is verified and prevents credential exposure on data planes.
 
 **Data plane configuration:**
 Each data plane needs a unique `AGENT_ID` in its `.env` file:

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Search, RefreshCw } from 'lucide-react';
 import { Card, Table, Input, Select, Button, Badge } from '../components/common';
 import { useAgents } from '../hooks/useApi';
+import { useTenant } from '../contexts/TenantContext';
 import { api } from '../api/client';
 import { useQuery } from '@tanstack/react-query';
 
@@ -21,20 +22,24 @@ interface LogEntry {
 }
 
 export function AgentLogs() {
-  const { data: agents = [] } = useAgents();
+  const { selectedTenantId } = useTenant();
+  // Filter agents by selected tenant
+  const { data: agents = [] } = useAgents(selectedTenantId);
   const [selectedAgent, setSelectedAgent] = useState<string>('');
   const [logSource, setLogSource] = useState<string>('');
   const [searchText, setSearchText] = useState<string>('');
   const [limit, setLimit] = useState<number>(100);
 
   const { data: logsData, isLoading, refetch } = useQuery({
-    queryKey: ['agentLogs', selectedAgent, logSource, searchText, limit],
+    queryKey: ['agentLogs', selectedTenantId, selectedAgent, logSource, searchText, limit],
     queryFn: () => api.queryAgentLogs({
       query: searchText,
       source: logSource || undefined,
       agent_id: selectedAgent || undefined,
+      tenant_id: selectedTenantId ?? undefined,
       limit,
     }),
+    enabled: selectedTenantId !== null,  // Wait for tenant to be selected
     refetchInterval: false,
   });
 
@@ -196,8 +201,12 @@ export function AgentLogs() {
           columns={columns}
           data={logs}
           keyExtractor={(log) => log.id}
-          isLoading={isLoading}
-          emptyMessage="No logs found. Try adjusting filters or check if agents are running."
+          isLoading={isLoading || selectedTenantId === null}
+          emptyMessage={
+            selectedTenantId === null
+              ? "Select a tenant to view agent logs"
+              : "No logs found. Try adjusting filters or check if agents are running."
+          }
         />
 
         {logs.length > 0 && (

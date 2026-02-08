@@ -17,6 +17,8 @@ from sqlalchemy.orm import sessionmaker
 # Set test encryption key before importing main (must be valid Fernet key)
 os.environ["ENCRYPTION_KEY"] = Fernet.generate_key().decode()
 os.environ["API_TOKENS"] = "test-token,admin-token"
+# Use shared in-memory SQLite for tests (must be shared so all connections see the same DB)
+os.environ["DATABASE_URL"] = "sqlite:///file::memory:?cache=shared"
 
 # Add parent directory to path so we can import main
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,8 +34,8 @@ def database_url():
         with PostgresContainer("postgres:16-alpine") as postgres:
             yield postgres.get_connection_url()
     else:
-        # Use in-memory SQLite for fast tests
-        yield "sqlite:///./test.db"
+        # Use shared in-memory SQLite (same as DATABASE_URL set above)
+        yield "sqlite:///file::memory:?cache=shared"
 
 
 @pytest.fixture(scope="session")
@@ -85,11 +87,25 @@ def client(engine, db_session):
 
 @pytest.fixture
 def auth_headers():
-    """Return authorization headers for API requests."""
-    return {"Authorization": "Bearer test-token"}
+    """Return authorization headers for admin API requests (default tenant)."""
+    # Use seeded admin token with proper tenant_id
+    return {"Authorization": "Bearer admin-test-token-do-not-use-in-production"}
 
 
 @pytest.fixture
 def admin_headers():
-    """Return admin authorization headers."""
-    return {"Authorization": "Bearer admin-token"}
+    """Return admin authorization headers (default tenant)."""
+    # Use seeded admin token with proper tenant_id
+    return {"Authorization": "Bearer admin-test-token-do-not-use-in-production"}
+
+
+@pytest.fixture
+def super_admin_headers():
+    """Return super admin authorization headers (cross-tenant)."""
+    return {"Authorization": "Bearer super-admin-test-token-do-not-use-in-production"}
+
+
+@pytest.fixture
+def acme_admin_headers():
+    """Return admin authorization headers for Acme Corp tenant."""
+    return {"Authorization": "Bearer acme-admin-test-token-do-not-use-in-production"}

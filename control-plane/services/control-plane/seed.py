@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Database seeder for AI Devbox Control Plane.
+Database seeder for Cagent Control Plane.
 
 Creates default data for development and testing:
 - A default admin token
 - A test agent (approved, for UI testing)
-- Sample allowlist entries
-- Sample rate limits
+- Sample domain policies (allowlist, rate limits, credentials)
 
 Usage:
     python seed.py              # Seed with defaults
@@ -36,7 +35,7 @@ if not os.environ.get('ENCRYPTION_KEY'):
 
 from main import (
     engine, SessionLocal, Base,
-    Tenant, ApiToken, AgentState, AllowlistEntry, RateLimit, Secret,
+    Tenant, ApiToken, AgentState, DomainPolicy,
     encrypt_secret
 )
 
@@ -64,9 +63,7 @@ def seed_database(reset: bool = False, show_token: bool = False):
             print("Resetting database...")
             db.query(ApiToken).delete()
             db.query(AgentState).delete()
-            db.query(AllowlistEntry).delete()
-            db.query(RateLimit).delete()
-            db.query(Secret).delete()
+            db.query(DomainPolicy).delete()
             db.query(Tenant).delete()
             db.commit()
             print("Database cleared.")
@@ -172,111 +169,105 @@ def seed_database(reset: bool = False, show_token: bool = False):
         else:
             print("Agent token 'test-agent-token' already exists")
 
-        # 5. Create sample allowlist entries
-        sample_domains = [
-            ("api.openai.com", "OpenAI API"),
-            ("api.anthropic.com", "Anthropic API"),
-            ("api.github.com", "GitHub API"),
-            ("pypi.org", "Python Package Index"),
-            ("registry.npmjs.org", "NPM Registry"),
+        # 5. Create sample domain policies (global)
+        sample_policies = [
+            {
+                "domain": "api.openai.com",
+                "alias": "openai",
+                "description": "OpenAI API - ChatGPT, GPT-4, embeddings",
+                "requests_per_minute": 60,
+                "burst_size": 10,
+                "allowed_paths": ["/v1/chat/*", "/v1/completions", "/v1/embeddings", "/v1/models"],
+            },
+            {
+                "domain": "api.anthropic.com",
+                "alias": "anthropic",
+                "description": "Anthropic API - Claude models",
+                "requests_per_minute": 60,
+                "burst_size": 10,
+                "allowed_paths": ["/v1/messages", "/v1/complete"],
+            },
+            {
+                "domain": "api.github.com",
+                "alias": "github",
+                "description": "GitHub API - repos, issues, PRs",
+                "requests_per_minute": 100,
+                "burst_size": 20,
+            },
+            {
+                "domain": "pypi.org",
+                "description": "Python Package Index - no auth required",
+            },
+            {
+                "domain": "files.pythonhosted.org",
+                "description": "Python package downloads",
+            },
+            {
+                "domain": "registry.npmjs.org",
+                "description": "NPM Registry - no auth required",
+            },
         ]
-        for domain, description in sample_domains:
-            existing = db.query(AllowlistEntry).filter(AllowlistEntry.value == domain).first()
-            if not existing:
-                entry = AllowlistEntry(
-                    entry_type="domain",
-                    value=domain,
-                    description=description,
-                    enabled=True,
-                    created_by="seed-script"
-                )
-                db.add(entry)
-                created.append(f"Allowlist entry '{domain}'")
-
-        # 6. Create sample rate limits (global)
-        sample_rate_limits = [
-            ("api.openai.com", 60, 10, "OpenAI - 60 req/min"),
-            ("api.anthropic.com", 60, 10, "Anthropic - 60 req/min"),
-            ("*.github.com", 100, 20, "GitHub - 100 req/min"),
-        ]
-        for domain, rpm, burst, description in sample_rate_limits:
-            existing = db.query(RateLimit).filter(
-                RateLimit.domain_pattern == domain,
-                RateLimit.agent_id.is_(None)
+        for policy_data in sample_policies:
+            existing = db.query(DomainPolicy).filter(
+                DomainPolicy.domain == policy_data["domain"],
+                DomainPolicy.agent_id.is_(None)
             ).first()
             if not existing:
-                rl = RateLimit(
-                    domain_pattern=domain,
-                    requests_per_minute=rpm,
-                    burst_size=burst,
-                    description=description,
+                policy = DomainPolicy(
+                    domain=policy_data["domain"],
+                    alias=policy_data.get("alias"),
+                    description=policy_data.get("description"),
+                    requests_per_minute=policy_data.get("requests_per_minute"),
+                    burst_size=policy_data.get("burst_size"),
+                    allowed_paths=policy_data.get("allowed_paths", []),
                     enabled=True
                 )
-                db.add(rl)
-                created.append(f"Rate limit for '{domain}' (global)")
+                db.add(policy)
+                created.append(f"Domain policy '{policy_data['domain']}'")
 
-        # 7. Create agent-specific allowlist entries for test-agent
-        test_agent_domains = [
-            ("huggingface.co", "HuggingFace - test-agent only"),
-            ("*.aws.amazon.com", "AWS APIs - test-agent only"),
+        # 6. Create agent-specific domain policies for test-agent
+        test_agent_policies = [
+            {
+                "domain": "huggingface.co",
+                "alias": "huggingface",
+                "description": "HuggingFace - test-agent only",
+                "requests_per_minute": 30,
+                "burst_size": 5,
+                "agent_id": "test-agent",
+                # With credential
+                "credential_header": "Authorization",
+                "credential_format": "Bearer {value}",
+                "credential_value": "hf_dummy_token_for_testing",
+            },
+            {
+                "domain": "*.aws.amazon.com",
+                "description": "AWS APIs - test-agent only",
+                "agent_id": "test-agent",
+            },
         ]
-        for domain, description in test_agent_domains:
-            existing = db.query(AllowlistEntry).filter(
-                AllowlistEntry.value == domain,
-                AllowlistEntry.agent_id == "test-agent"
+        for policy_data in test_agent_policies:
+            existing = db.query(DomainPolicy).filter(
+                DomainPolicy.domain == policy_data["domain"],
+                DomainPolicy.agent_id == policy_data.get("agent_id")
             ).first()
             if not existing:
-                entry = AllowlistEntry(
-                    entry_type="domain",
-                    value=domain,
-                    description=description,
-                    enabled=True,
-                    created_by="seed-script",
-                    agent_id="test-agent"
+                policy = DomainPolicy(
+                    domain=policy_data["domain"],
+                    alias=policy_data.get("alias"),
+                    description=policy_data.get("description"),
+                    requests_per_minute=policy_data.get("requests_per_minute"),
+                    burst_size=policy_data.get("burst_size"),
+                    allowed_paths=policy_data.get("allowed_paths", []),
+                    agent_id=policy_data.get("agent_id"),
+                    enabled=True
                 )
-                db.add(entry)
-                created.append(f"Allowlist entry '{domain}' (test-agent)")
-
-        # 8. Create agent-specific rate limits for test-agent
-        test_agent_rate_limits = [
-            ("api.openai.com", 120, 20, "OpenAI - test-agent custom (120 req/min)"),
-            ("huggingface.co", 30, 5, "HuggingFace - test-agent (30 req/min)"),
-        ]
-        for domain, rpm, burst, description in test_agent_rate_limits:
-            existing = db.query(RateLimit).filter(
-                RateLimit.domain_pattern == domain,
-                RateLimit.agent_id == "test-agent"
-            ).first()
-            if not existing:
-                rl = RateLimit(
-                    domain_pattern=domain,
-                    requests_per_minute=rpm,
-                    burst_size=burst,
-                    description=description,
-                    enabled=True,
-                    agent_id="test-agent"
-                )
-                db.add(rl)
-                created.append(f"Rate limit for '{domain}' (test-agent)")
-
-        # 9. Create agent-specific secret for test-agent
-        existing_secret = db.query(Secret).filter(
-            Secret.name == "TEST_AGENT_HF_TOKEN",
-            Secret.agent_id == "test-agent"
-        ).first()
-        if not existing_secret:
-            secret = Secret(
-                name="TEST_AGENT_HF_TOKEN",
-                encrypted_value=encrypt_secret("hf_dummy_token_for_testing"),
-                domain_pattern="huggingface.co",
-                alias="huggingface",
-                header_name="Authorization",
-                header_format="Bearer {value}",
-                description="HuggingFace token for test-agent",
-                agent_id="test-agent"
-            )
-            db.add(secret)
-            created.append("Secret 'TEST_AGENT_HF_TOKEN' (test-agent)")
+                # Handle credential if present
+                if policy_data.get("credential_value"):
+                    policy.credential_header = policy_data.get("credential_header")
+                    policy.credential_format = policy_data.get("credential_format")
+                    policy.credential_value_encrypted = encrypt_secret(policy_data["credential_value"])
+                db.add(policy)
+                created.append(f"Domain policy '{policy_data['domain']}' ({policy_data.get('agent_id', 'global')})")
 
         db.commit()
 
@@ -315,10 +306,11 @@ def seed_database(reset: bool = False, show_token: bool = False):
         print("\n3. Test agents in UI:")
         print("   - 'test-agent' is approved and ready")
         print("   - 'pending-agent' needs approval (test the approval flow)")
-        print("\n4. Per-agent configuration:")
-        print("   - 'test-agent' has agent-specific allowlist entries, rate limits, and secrets")
-        print("   - '__default__' agent holds tenant-global config")
-        print("   - Agent-specific entries take precedence over __default__ entries")
+        print("\n4. Domain Policies:")
+        print("   - Unified policies for allowlist, rate limits, egress, and credentials")
+        print("   - Global policies: api.openai.com, api.anthropic.com, pypi.org, etc.")
+        print("   - 'test-agent' has agent-specific policy for huggingface.co with credential")
+        print("   - Agent-specific policies take precedence over global policies")
         print("\n5. Multi-tenancy:")
         print("   - Default tenant created with slug 'default'")
         print("   - All test agents belong to the default tenant")

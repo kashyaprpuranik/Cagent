@@ -85,6 +85,8 @@ export const api = {
     token_type: string;
     agent_id: string | null;
     tenant_id: number | null;
+    tenant_name: string | null;
+    tenant_slug: string | null;
     is_super_admin: boolean;
     roles: string[];
   }> => {
@@ -103,8 +105,11 @@ export const api = {
   },
 
   // Data Planes (Agents)
-  getDataPlanes: async (): Promise<DataPlane[]> => {
-    const response = await fetch(`${API_BASE}/agents`, {
+  getDataPlanes: async (tenantId?: number): Promise<DataPlane[]> => {
+    const url = tenantId !== undefined
+      ? `${API_BASE}/agents?tenant_id=${tenantId}`
+      : `${API_BASE}/agents`;
+    const response = await fetch(url, {
       headers: getAuthHeaders(),
     });
     return handleResponse<DataPlane[]>(response);
@@ -131,6 +136,7 @@ export const api = {
     query?: string;
     source?: string;
     agent_id?: string;
+    tenant_id?: number;
     limit?: number;
     start?: string;
     end?: string;
@@ -139,6 +145,7 @@ export const api = {
     if (params.query) searchParams.append('query', params.query);
     if (params.source) searchParams.append('source', params.source);
     if (params.agent_id) searchParams.append('agent_id', params.agent_id);
+    if (params.tenant_id !== undefined) searchParams.append('tenant_id', String(params.tenant_id));
     if (params.limit) searchParams.append('limit', String(params.limit));
     if (params.start) searchParams.append('start', params.start);
     if (params.end) searchParams.append('end', params.end);
@@ -190,8 +197,11 @@ export const api = {
   },
 
   // API Tokens
-  getTokens: async (): Promise<ApiToken[]> => {
-    const response = await fetch(`${API_BASE}/tokens`, {
+  getTokens: async (tenantId?: number): Promise<ApiToken[]> => {
+    const url = tenantId !== undefined
+      ? `${API_BASE}/tokens?tenant_id=${tenantId}`
+      : `${API_BASE}/tokens`;
+    const response = await fetch(url, {
       headers: getAuthHeaders(),
     });
     return handleResponse<ApiToken[]>(response);
@@ -320,18 +330,27 @@ export const api = {
   },
 
   // Domain Policies
-  getDomainPolicies: async (agentId?: string): Promise<DomainPolicy[]> => {
-    const url = agentId
-      ? `${API_BASE}/domain-policies?agent_id=${encodeURIComponent(agentId)}`
-      : `${API_BASE}/domain-policies`;
+  getDomainPolicies: async (params?: { agentId?: string; tenantId?: number }): Promise<DomainPolicy[]> => {
+    const searchParams = new URLSearchParams();
+    if (params?.agentId) {
+      searchParams.append('agent_id', params.agentId);
+    }
+    if (params?.tenantId !== undefined) {
+      searchParams.append('tenant_id', String(params.tenantId));
+    }
+    const queryString = searchParams.toString();
+    const url = queryString ? `${API_BASE}/domain-policies?${queryString}` : `${API_BASE}/domain-policies`;
     const response = await fetch(url, {
       headers: getAuthHeaders(),
     });
     return handleResponse<DomainPolicy[]>(response);
   },
 
-  createDomainPolicy: async (data: CreateDomainPolicyRequest): Promise<DomainPolicy> => {
-    const response = await fetch(`${API_BASE}/domain-policies`, {
+  createDomainPolicy: async (data: CreateDomainPolicyRequest, tenantId?: number): Promise<DomainPolicy> => {
+    const url = tenantId !== undefined
+      ? `${API_BASE}/domain-policies?tenant_id=${tenantId}`
+      : `${API_BASE}/domain-policies`;
+    const response = await fetch(url, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify(data),

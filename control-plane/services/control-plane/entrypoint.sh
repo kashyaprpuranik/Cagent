@@ -145,6 +145,7 @@ with engine.connect() as conn:
         conn.execute(text('''
             CREATE TABLE domain_policies (
                 id SERIAL PRIMARY KEY,
+                tenant_id INTEGER NOT NULL REFERENCES tenants(id),
                 domain VARCHAR(200) NOT NULL,
                 alias VARCHAR(50),
                 description VARCHAR(500),
@@ -159,13 +160,88 @@ with engine.connect() as conn:
                 credential_value_encrypted TEXT,
                 credential_rotated_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(domain, agent_id)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         '''))
         conn.execute(text('CREATE INDEX ix_domain_policies_domain ON domain_policies(domain)'))
         conn.execute(text('CREATE INDEX ix_domain_policies_agent_id ON domain_policies(agent_id)'))
         conn.execute(text('CREATE INDEX ix_domain_policies_enabled ON domain_policies(enabled)'))
+        conn.execute(text('CREATE INDEX ix_domain_policies_tenant_id ON domain_policies(tenant_id)'))
+        conn.execute(text('CREATE UNIQUE INDEX uq_domain_policy_tenant ON domain_policies(domain, agent_id, tenant_id)'))
+        conn.commit()
+
+    # Add tenant_id column to domain_policies if missing
+    result = conn.execute(text(\"\"\"
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'domain_policies' AND column_name = 'tenant_id'
+    \"\"\"))
+    if not result.fetchone():
+        print('Adding tenant_id column to domain_policies...')
+        conn.execute(text('ALTER TABLE domain_policies ADD COLUMN tenant_id INTEGER REFERENCES tenants(id)'))
+        conn.execute(text('CREATE INDEX ix_domain_policies_tenant_id ON domain_policies(tenant_id)'))
+        # Drop old unique constraint and create new one with tenant_id
+        conn.execute(text('ALTER TABLE domain_policies DROP CONSTRAINT IF EXISTS domain_policies_domain_agent_id_key'))
+        conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_domain_policy_tenant ON domain_policies(domain, agent_id, tenant_id)'))
+        conn.commit()
+
+    # Ensure domain_policies.tenant_id is NOT NULL (migrate existing data first)
+    result = conn.execute(text(\"\"\"
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_name = 'domain_policies' AND column_name = 'tenant_id'
+    \"\"\"))
+    row = result.fetchone()
+    if row and row[0] == 'YES':
+        print('Making domain_policies.tenant_id NOT NULL...')
+        # First set any NULL values to default tenant
+        conn.execute(text(\"\"\"
+            UPDATE domain_policies SET tenant_id = (
+                SELECT id FROM tenants WHERE slug = 'default' AND deleted_at IS NULL LIMIT 1
+            ) WHERE tenant_id IS NULL
+        \"\"\"))
+        conn.execute(text('ALTER TABLE domain_policies ALTER COLUMN tenant_id SET NOT NULL'))
+        conn.commit()
+
+    # Ensure agent_state.tenant_id is NOT NULL
+    result = conn.execute(text(\"\"\"
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_name = 'agent_state' AND column_name = 'tenant_id'
+    \"\"\"))
+    row = result.fetchone()
+    if row and row[0] == 'YES':
+        print('Making agent_state.tenant_id NOT NULL...')
+        # First set any NULL values to default tenant
+        conn.execute(text(\"\"\"
+            UPDATE agent_state SET tenant_id = (
+                SELECT id FROM tenants WHERE slug = 'default' AND deleted_at IS NULL LIMIT 1
+            ) WHERE tenant_id IS NULL
+        \"\"\"))
+        conn.execute(text('ALTER TABLE agent_state ALTER COLUMN tenant_id SET NOT NULL'))
+        conn.commit()
+
+    # Add tenant_id column to audit_logs if missing
+    result = conn.execute(text(\"\"\"
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'audit_logs' AND column_name = 'tenant_id'
+    \"\"\"))
+    if not result.fetchone():
+        print('Adding tenant_id column to audit_logs...')
+        # First ensure __system__ tenant exists
+        result = conn.execute(text(\"\"\"
+            SELECT id FROM tenants WHERE slug = '__system__' AND deleted_at IS NULL LIMIT 1
+        \"\"\"))
+        system_tenant = result.fetchone()
+        if not system_tenant:
+            conn.execute(text(\"INSERT INTO tenants (name, slug) VALUES ('System', '__system__')\"))
+            conn.commit()
+            result = conn.execute(text(\"\"\"
+                SELECT id FROM tenants WHERE slug = '__system__' AND deleted_at IS NULL LIMIT 1
+            \"\"\"))
+            system_tenant = result.fetchone()
+        system_tenant_id = system_tenant[0]
+
+        # Add column with default to system tenant
+        conn.execute(text(f'ALTER TABLE audit_logs ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT {system_tenant_id} REFERENCES tenants(id)'))
+        conn.execute(text('CREATE INDEX ix_audit_logs_tenant_id ON audit_logs(tenant_id)'))
         conn.commit()
 
     # Fix seed tokens - ensure correct is_super_admin and tenant_id

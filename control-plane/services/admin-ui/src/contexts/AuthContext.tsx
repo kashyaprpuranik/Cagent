@@ -5,6 +5,8 @@ interface AuthUser {
   token_type: string;
   agent_id: string | null;
   tenant_id: number | null;
+  tenant_name: string | null;
+  tenant_slug: string | null;
   is_super_admin: boolean;
   roles: string[];
 }

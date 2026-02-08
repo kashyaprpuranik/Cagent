@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///./control_plane.db')
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if 'sqlite' in DATABASE_URL else {})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Sentinel tenant for super admin/system actions
+SYSTEM_TENANT_SLUG = "__system__"
 Base = declarative_base()
 
 
@@ -82,7 +85,7 @@ class TenantIpAcl(Base):
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     event_type = Column(String(50), index=True)
@@ -91,6 +94,8 @@ class AuditLog(Base):
     action = Column(String(200))
     details = Column(Text)
     severity = Column(String(20), index=True)
+    # Tenant context - uses __system__ tenant (slug="__system__") for super admin actions
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
 
 class DomainPolicy(Base):
@@ -98,11 +103,12 @@ class DomainPolicy(Base):
     __tablename__ = "domain_policies"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     domain = Column(String(200), nullable=False, index=True)  # e.g., "api.openai.com", "*.github.com"
     alias = Column(String(50))  # e.g., "openai" -> openai.devbox.local
     description = Column(String(500))
     enabled = Column(Boolean, default=True, index=True)
-    agent_id = Column(String(100), nullable=True, index=True)  # NULL = global
+    agent_id = Column(String(100), nullable=True, index=True)  # NULL = tenant-global
 
     # Path restrictions (JSON array of patterns, empty = all paths allowed)
     allowed_paths = Column(JSON, default=list)  # ["/v1/chat/*", "/v1/models"]
@@ -124,8 +130,8 @@ class DomainPolicy(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
-        # Unique constraint: one policy per domain per agent scope
-        UniqueConstraint('domain', 'agent_id', name='uq_domain_policy'),
+        # Unique constraint: one policy per domain per agent per tenant
+        UniqueConstraint('domain', 'agent_id', 'tenant_id', name='uq_domain_policy_tenant'),
     )
 
 
@@ -135,8 +141,8 @@ class AgentState(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     agent_id = Column(String(100), unique=True, index=True, default="default")
-    # Multi-tenancy
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    # Multi-tenancy - every agent belongs to exactly one tenant
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     tenant = relationship("Tenant", back_populates="agents")
     # Soft delete
     deleted_at = Column(DateTime, nullable=True, index=True)
@@ -375,6 +381,7 @@ class DomainPolicyUpdate(BaseModel):
 class DomainPolicyResponse(BaseModel):
     """Domain policy response (credential value hidden)."""
     id: int
+    tenant_id: Optional[int]
     domain: str
     alias: Optional[str]
     description: Optional[str]
@@ -470,6 +477,20 @@ class TerminalSessionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class LogEntry(BaseModel):
+    """Single log entry from data plane."""
+    timestamp: Optional[datetime] = None  # Defaults to server time if not provided
+    message: str
+    source: str  # envoy, agent, coredns, gvisor
+    level: Optional[str] = "info"
+    extra: Optional[dict] = None  # Additional fields passed through
+
+
+class LogBatch(BaseModel):
+    """Batch of log entries for ingestion."""
+    logs: List[LogEntry]
 
 
 # =============================================================================
@@ -713,6 +734,41 @@ def get_tenant_agent_ids(db: Session, tenant_id: int) -> List[str]:
     return [a.agent_id for a in agents]
 
 
+def get_system_tenant_id(db: Session) -> int:
+    """Get the __system__ tenant ID (sentinel for super admin/system actions).
+
+    This tenant is used for audit logs when the action is performed by:
+    - Super admins (who have no tenant restriction)
+    - System/seed scripts
+    - Agent heartbeats (before tenant context is established)
+    """
+    system_tenant = db.query(Tenant).filter(
+        Tenant.slug == SYSTEM_TENANT_SLUG,
+        Tenant.deleted_at.is_(None)
+    ).first()
+    if not system_tenant:
+        # Create if missing (shouldn't happen after seeding)
+        system_tenant = Tenant(name="System", slug=SYSTEM_TENANT_SLUG)
+        db.add(system_tenant)
+        db.flush()
+    return system_tenant.id
+
+
+def get_audit_tenant_id(token_info: TokenInfo, db: Session, agent_state: AgentState = None) -> int:
+    """Get the tenant ID to use for audit logging.
+
+    Priority:
+    1. If agent_state is provided, use its tenant_id
+    2. If token has a tenant_id, use it
+    3. Otherwise use __system__ tenant (for super admins)
+    """
+    if agent_state and agent_state.tenant_id:
+        return agent_state.tenant_id
+    if token_info.tenant_id:
+        return token_info.tenant_id
+    return get_system_tenant_id(db)
+
+
 # =============================================================================
 # IP ACL Validation
 # =============================================================================
@@ -785,7 +841,8 @@ async def verify_ip_acl(
             "tenant_id": token_info.tenant_id,
             "allowed_cidrs": [acl.cidr for acl in ip_acls]
         }),
-        severity="WARNING"
+        severity="WARNING",
+        tenant_id=token_info.tenant_id  # Must have tenant_id since IP ACL check only applies to tenant admins
     )
     db.add(log)
     db.commit()
@@ -843,12 +900,13 @@ limiter = Limiter(
 
 
 def seed_tokens(db: Session):
-    """Seed default tokens for development/testing.
+    """Seed default data for development/testing.
 
     Creates:
-    - super-admin-token: Super admin (cross-tenant access)
-    - admin-token: Admin role (full access within default tenant)
-    - dev-token: Developer role (read access, terminal access within default tenant)
+    - Default tenant with tokens, domain policies, and IP ACLs
+    - Acme Corp tenant (for testing multi-tenancy)
+    - super-admin-token: Super admin (cross-tenant access) - direct DB insert
+    - Other tokens, domain policies, IP ACLs with audit logs
 
     These are only created if they don't already exist. The actual token
     values are deterministic for easy testing but should be replaced in production.
@@ -857,14 +915,65 @@ def seed_tokens(db: Session):
     if os.environ.get('SEED_TOKENS', 'true').lower() != 'true':
         return
 
-    # Get the default tenant for non-super-admin tokens
+    # Create or get __system__ tenant (sentinel for super admin/system actions)
+    system_tenant = db.query(Tenant).filter(
+        Tenant.slug == "__system__",
+        Tenant.deleted_at.is_(None)
+    ).first()
+
+    if not system_tenant:
+        system_tenant = Tenant(name="System", slug="__system__")
+        db.add(system_tenant)
+        db.flush()
+        logger.info("Seeded __system__ tenant (sentinel for super admin actions)")
+
+    system_tenant_id = system_tenant.id
+
+    def audit_log(event_type: str, action: str, details: dict, container_id: str = None, tenant_id: int = None):
+        """Create audit log entry for seeded data."""
+        log = AuditLog(
+            event_type=event_type,
+            user="seed-script",
+            container_id=container_id,
+            action=action,
+            details=json.dumps(details),
+            severity="INFO",
+            tenant_id=tenant_id or system_tenant_id  # Default to __system__ tenant
+        )
+        db.add(log)
+
+    # Create or get default tenant
     default_tenant = db.query(Tenant).filter(
         Tenant.slug == "default",
         Tenant.deleted_at.is_(None)
     ).first()
-    default_tenant_id = default_tenant.id if default_tenant else None
+
+    if not default_tenant:
+        default_tenant = Tenant(name="Default", slug="default")
+        db.add(default_tenant)
+        db.flush()  # Get the ID
+        audit_log("tenant_created", f"Seeded tenant 'Default' (slug: default)", {"id": default_tenant.id, "name": "Default", "slug": "default"})
+        logger.info("Seeded default tenant")
+
+    default_tenant_id = default_tenant.id
+
+    # Create or get Acme Corp tenant (for testing multi-tenancy)
+    acme_tenant = db.query(Tenant).filter(
+        Tenant.slug == "acme",
+        Tenant.deleted_at.is_(None)
+    ).first()
+
+    if not acme_tenant:
+        acme_tenant = Tenant(name="Acme Corp", slug="acme")
+        db.add(acme_tenant)
+        db.flush()
+        audit_log("tenant_created", f"Seeded tenant 'Acme Corp' (slug: acme)", {"id": acme_tenant.id, "name": "Acme Corp", "slug": "acme"})
+        logger.info("Seeded Acme Corp tenant")
+
+    acme_tenant_id = acme_tenant.id
 
     # Well-known test tokens (deterministic for testing)
+    # Super admin token uses direct DB (bootstrap - no audit log needed)
     test_tokens = [
         {
             "name": "super-admin-token",
@@ -890,6 +999,14 @@ def seed_tokens(db: Session):
             "is_super_admin": False,
             "tenant_id": default_tenant_id,  # Scoped to default tenant
         },
+        {
+            "name": "acme-admin-token",
+            "raw_token": "acme-admin-test-token-do-not-use-in-production",
+            "token_type": "admin",
+            "roles": "admin",
+            "is_super_admin": False,
+            "tenant_id": acme_tenant_id,  # Scoped to Acme Corp tenant
+        },
     ]
 
     for token_def in test_tokens:
@@ -904,7 +1021,102 @@ def seed_tokens(db: Session):
                 tenant_id=token_def["tenant_id"],
             )
             db.add(db_token)
+            db.flush()
+            # Audit log for non-super-admin tokens
+            if not token_def["is_super_admin"]:
+                audit_log(
+                    "token_created",
+                    f"Seeded token '{token_def['name']}' (roles: {token_def['roles']})",
+                    {"id": db_token.id, "name": token_def["name"], "roles": token_def["roles"], "tenant_id": token_def["tenant_id"]}
+                )
             logger.info(f"Seeded token: {token_def['name']} (roles: {token_def['roles']}, tenant: {token_def['tenant_id']})")
+
+    # Seed sample domain policies for default tenant
+    default_policies = [
+        {"domain": "api.openai.com", "alias": "openai", "description": "OpenAI API"},
+        {"domain": "api.anthropic.com", "alias": "anthropic", "description": "Anthropic Claude API"},
+        {"domain": "api.github.com", "alias": "github", "description": "GitHub API"},
+        {"domain": "pypi.org", "description": "Python Package Index"},
+        {"domain": "files.pythonhosted.org", "description": "Python package downloads"},
+        {"domain": "registry.npmjs.org", "description": "NPM Registry"},
+        {"domain": "*.githubusercontent.com", "description": "GitHub raw content"},
+    ]
+
+    for policy_def in default_policies:
+        existing = db.query(DomainPolicy).filter(
+            DomainPolicy.domain == policy_def["domain"],
+            DomainPolicy.tenant_id == default_tenant_id,
+            DomainPolicy.agent_id.is_(None)
+        ).first()
+        if not existing:
+            policy = DomainPolicy(
+                tenant_id=default_tenant_id,
+                domain=policy_def["domain"],
+                alias=policy_def.get("alias"),
+                description=policy_def.get("description"),
+                enabled=True,
+            )
+            db.add(policy)
+            db.flush()
+            audit_log(
+                "domain_policy_created",
+                f"Seeded domain policy '{policy_def['domain']}' for tenant default",
+                {"id": policy.id, "domain": policy_def["domain"], "alias": policy_def.get("alias"), "tenant_id": default_tenant_id}
+            )
+            logger.info(f"Seeded domain policy: {policy_def['domain']} (tenant: default)")
+
+    # Seed sample domain policies for Acme Corp tenant (different policies to differentiate)
+    acme_policies = [
+        {"domain": "api.openai.com", "alias": "openai", "description": "OpenAI API"},
+        {"domain": "api.stripe.com", "alias": "stripe", "description": "Stripe Payments API"},
+        {"domain": "api.twilio.com", "alias": "twilio", "description": "Twilio Communications API"},
+    ]
+
+    for policy_def in acme_policies:
+        existing = db.query(DomainPolicy).filter(
+            DomainPolicy.domain == policy_def["domain"],
+            DomainPolicy.tenant_id == acme_tenant_id,
+            DomainPolicy.agent_id.is_(None)
+        ).first()
+        if not existing:
+            policy = DomainPolicy(
+                tenant_id=acme_tenant_id,
+                domain=policy_def["domain"],
+                alias=policy_def.get("alias"),
+                description=policy_def.get("description"),
+                enabled=True,
+            )
+            db.add(policy)
+            db.flush()
+            audit_log(
+                "domain_policy_created",
+                f"Seeded domain policy '{policy_def['domain']}' for tenant acme",
+                {"id": policy.id, "domain": policy_def["domain"], "alias": policy_def.get("alias"), "tenant_id": acme_tenant_id}
+            )
+            logger.info(f"Seeded domain policy: {policy_def['domain']} (tenant: acme)")
+
+    # Seed IP ACLs with universal range (allow all IPs) for each tenant
+    for tenant_id, tenant_name in [(default_tenant_id, "default"), (acme_tenant_id, "acme")]:
+        existing_acl = db.query(TenantIpAcl).filter(
+            TenantIpAcl.tenant_id == tenant_id,
+            TenantIpAcl.cidr == "0.0.0.0/0"
+        ).first()
+        if not existing_acl:
+            acl = TenantIpAcl(
+                tenant_id=tenant_id,
+                cidr="0.0.0.0/0",
+                description="Allow all IPv4 addresses (development default)",
+                enabled=True,
+                created_by="seed-script"
+            )
+            db.add(acl)
+            db.flush()
+            audit_log(
+                "ip_acl_created",
+                f"Seeded IP ACL '0.0.0.0/0' for tenant {tenant_name}",
+                {"id": acl.id, "cidr": "0.0.0.0/0", "tenant_id": tenant_id}
+            )
+            logger.info(f"Seeded IP ACL: 0.0.0.0/0 (tenant: {tenant_name})")
 
     db.commit()
 
@@ -981,24 +1193,123 @@ async def get_info():
 
 
 @app.get("/api/v1/auth/me")
-async def get_current_user(token_info: TokenInfo = Depends(verify_token)):
+async def get_current_user(
+    token_info: TokenInfo = Depends(verify_token),
+    db: Session = Depends(get_db)
+):
     """Get current user info from token"""
+    # Get tenant name if user has a tenant
+    tenant_name = None
+    tenant_slug = None
+    if token_info.tenant_id:
+        tenant = db.query(Tenant).filter(Tenant.id == token_info.tenant_id).first()
+        if tenant:
+            tenant_name = tenant.name
+            tenant_slug = tenant.slug
+
     return {
         "token_type": token_info.token_type,
         "agent_id": token_info.agent_id,
         "tenant_id": token_info.tenant_id,
+        "tenant_name": tenant_name,
+        "tenant_slug": tenant_slug,
         "is_super_admin": token_info.is_super_admin,
         "roles": token_info.roles
     }
 
 
 # =============================================================================
-# OpenObserve Log Query (for DP audit logs)
+# OpenObserve Log Ingestion & Query
 # =============================================================================
 
 OPENOBSERVE_URL = os.environ.get('OPENOBSERVE_URL', 'http://openobserve:5080')
 OPENOBSERVE_USER = os.environ.get('OPENOBSERVE_USER', 'admin@cagent.local')
 OPENOBSERVE_PASSWORD = os.environ.get('OPENOBSERVE_PASSWORD', 'admin')
+
+
+@app.post("/api/v1/logs/ingest")
+@limiter.limit("100/minute")
+async def ingest_logs(
+    request: Request,
+    batch: LogBatch,
+    token_info: TokenInfo = Depends(verify_token),
+    db: Session = Depends(get_db)
+):
+    """Ingest logs from data plane agents.
+
+    Requires agent token. Injects trusted agent_id and tenant_id from database.
+    This ensures data planes cannot spoof their identity in logs.
+    """
+    import httpx
+
+    # Only agent tokens can ingest logs
+    if token_info.token_type != "agent":
+        raise HTTPException(
+            status_code=403,
+            detail="Only agent tokens can ingest logs"
+        )
+
+    if not token_info.agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Agent token must have agent_id"
+        )
+
+    # Get tenant_id from agent state (trusted source, not from request)
+    agent = db.query(AgentState).filter(
+        AgentState.agent_id == token_info.agent_id,
+        AgentState.deleted_at.is_(None)
+    ).first()
+
+    if not agent:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent {token_info.agent_id} not found"
+        )
+
+    if not agent.approved:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Agent {token_info.agent_id} is not approved"
+        )
+
+    tenant_id = agent.tenant_id
+
+    # Transform logs for OpenObserve, injecting trusted identity
+    enriched_logs = []
+    for log in batch.logs:
+        entry = {
+            "_timestamp": int((log.timestamp or datetime.utcnow()).timestamp() * 1_000_000),
+            "message": log.message,
+            "source": log.source,
+            "level": log.level or "info",
+            "agent_id": token_info.agent_id,  # Trusted, from verified token
+            "tenant_id": tenant_id,            # Trusted, from database
+        }
+        if log.extra:
+            # Filter out any attempt to override trusted fields
+            safe_extra = {k: v for k, v in log.extra.items()
+                         if k not in ("agent_id", "tenant_id", "_timestamp")}
+            entry.update(safe_extra)
+        enriched_logs.append(entry)
+
+    # Forward to OpenObserve
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{OPENOBSERVE_URL}/api/default/default/_json",
+            json=enriched_logs,
+            auth=(OPENOBSERVE_USER, OPENOBSERVE_PASSWORD),
+            timeout=30.0
+        )
+
+        if response.status_code not in (200, 201):
+            logger.error(f"OpenObserve ingestion failed: {response.status_code} {response.text}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to store logs: {response.text}"
+            )
+
+    return {"status": "ok", "count": len(enriched_logs)}
 
 
 @app.get("/api/v1/logs/query")
@@ -1008,31 +1319,74 @@ async def query_agent_logs(
     query: str = "",
     source: Optional[str] = None,
     agent_id: Optional[str] = None,
-    limit: int = 100,
+    tenant_id: Optional[int] = Query(default=None, description="Filter by tenant (super admin only)"),
+    limit: int = Query(default=100, le=1000),
     start: Optional[str] = None,
     end: Optional[str] = None,
-    token_info: TokenInfo = Depends(require_developer_role)  # Developers can view logs
+    token_info: TokenInfo = Depends(require_developer_role),
+    db: Session = Depends(get_db)
 ):
-    """Query agent logs from OpenObserve (admin only).
+    """Query agent logs from OpenObserve.
+
+    Tenant filtering:
+    - Super admins can query any tenant (optional tenant_id filter)
+    - Tenant users can only query their tenant's logs
+    - If agent_id specified, verifies user has access to that agent's tenant
 
     Args:
         query: Search text (full-text search in message field)
         source: Filter by source (envoy, agent, coredns, gvisor)
         agent_id: Filter by agent ID
-        limit: Max number of log lines to return
+        tenant_id: Filter by tenant (super admin only)
+        limit: Max number of log lines to return (max 1000)
         start: Start time (RFC3339, e.g., 2024-01-01T00:00:00Z)
         end: End time (RFC3339)
     """
     import httpx
-    from datetime import datetime, timedelta
 
-    # Build SQL query for OpenObserve
+    # Determine effective tenant filter
+    if token_info.is_super_admin:
+        effective_tenant_id = tenant_id  # Optional filter for super admins
+    else:
+        # Non-super-admin MUST be scoped to their tenant
+        if not token_info.tenant_id:
+            raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
+        effective_tenant_id = token_info.tenant_id
+
+    # If agent_id specified, verify access to that agent's tenant
+    if agent_id:
+        agent = db.query(AgentState).filter(
+            AgentState.agent_id == agent_id,
+            AgentState.deleted_at.is_(None)
+        ).first()
+
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+
+        # Non-super-admin must have access to agent's tenant
+        if not token_info.is_super_admin and agent.tenant_id != token_info.tenant_id:
+            raise HTTPException(status_code=403, detail=f"Access denied to agent {agent_id}")
+
+    # Build SQL query for OpenObserve with SQL injection prevention
     conditions = []
+
+    # Tenant filter (always applied for non-super-admins)
+    if effective_tenant_id is not None:
+        conditions.append(f"tenant_id = {int(effective_tenant_id)}")
+
     if query:
-        conditions.append(f"message LIKE '%{query}%'")
+        # Escape single quotes to prevent SQL injection
+        safe_query = query.replace("'", "''")
+        conditions.append(f"message LIKE '%{safe_query}%'")
     if source:
+        # Validate source is alphanumeric
+        if not source.replace("_", "").replace("-", "").isalnum():
+            raise HTTPException(status_code=400, detail="Invalid source parameter")
         conditions.append(f"source = '{source}'")
     if agent_id:
+        # Validate agent_id is alphanumeric with hyphens/underscores
+        if not agent_id.replace("_", "").replace("-", "").isalnum():
+            raise HTTPException(status_code=400, detail="Invalid agent_id parameter")
         conditions.append(f"agent_id = '{agent_id}'")
 
     # Time range
@@ -1095,6 +1449,7 @@ async def query_agent_logs(
 async def get_audit_logs(
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin_role),
+    tenant_id: Optional[int] = Query(default=None, description="Filter by tenant (super admin only)"),
     event_type: Optional[str] = None,
     user: Optional[str] = None,
     severity: Optional[str] = None,
@@ -1105,9 +1460,25 @@ async def get_audit_logs(
     limit: int = Query(default=100, le=1000),
     offset: int = 0
 ):
-    """Search and retrieve audit logs (admin only)"""
+    """Search and retrieve audit logs (admin only).
+
+    Super admins can filter by tenant_id, or see all logs if not specified.
+    Tenant admins see only their tenant's logs.
+    """
     query = db.query(AuditLog)
-    
+
+    # Apply tenant filtering
+    if token_info.is_super_admin:
+        # Super admin can optionally filter by tenant
+        if tenant_id is not None:
+            query = query.filter(AuditLog.tenant_id == tenant_id)
+        # else: no filter, see all logs
+    else:
+        # Non-super-admin MUST be scoped to their tenant
+        if not token_info.tenant_id:
+            raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
+        query = query.filter(AuditLog.tenant_id == token_info.tenant_id)
+
     if event_type:
         query = query.filter(AuditLog.event_type == event_type)
     if user:
@@ -1122,10 +1493,10 @@ async def get_audit_logs(
         query = query.filter(AuditLog.timestamp <= end_time)
     if search:
         query = query.filter(
-            AuditLog.action.contains(search) | 
+            AuditLog.action.contains(search) |
             AuditLog.details.contains(search)
         )
-    
+
     return query.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limit).all()
 
 
@@ -1148,6 +1519,7 @@ def domain_policy_to_response(policy: DomainPolicy) -> dict:
     """Convert DomainPolicy to response dict with has_credential flag."""
     return {
         "id": policy.id,
+        "tenant_id": policy.tenant_id,
         "domain": policy.domain,
         "alias": policy.alias,
         "description": policy.description,
@@ -1170,10 +1542,20 @@ def domain_policy_to_response(policy: DomainPolicy) -> dict:
 async def list_domain_policies(
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin_role),
-    agent_id: Optional[str] = None
+    agent_id: Optional[str] = None,
+    tenant_id: Optional[int] = None
 ):
-    """List all domain policies. Optionally filter by agent_id."""
+    """List domain policies. Filter by tenant_id (super admin) or agent_id."""
     query = db.query(DomainPolicy)
+
+    # Tenant filtering
+    if token_info.is_super_admin:
+        # Super admin can filter by tenant_id or see all
+        if tenant_id is not None:
+            query = query.filter(DomainPolicy.tenant_id == tenant_id)
+    else:
+        # Non-super-admin sees only their tenant's policies
+        query = query.filter(DomainPolicy.tenant_id == token_info.tenant_id)
 
     if agent_id:
         query = query.filter(
@@ -1189,13 +1571,24 @@ async def create_domain_policy(
     request: Request,
     policy: DomainPolicyCreate,
     db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
+    token_info: TokenInfo = Depends(require_admin_role_with_ip_check),
+    tenant_id: Optional[int] = None
 ):
     """Create a new domain policy."""
-    # Check for duplicates
+    # Determine tenant_id - every policy must belong to a tenant
+    if token_info.is_super_admin:
+        if tenant_id is None:
+            raise HTTPException(status_code=400, detail="tenant_id is required")
+        effective_tenant_id = tenant_id
+    else:
+        # Non-super-admin policies are always scoped to their tenant
+        effective_tenant_id = token_info.tenant_id
+
+    # Check for duplicates within same tenant
     existing = db.query(DomainPolicy).filter(
         DomainPolicy.domain == policy.domain,
-        DomainPolicy.agent_id == policy.agent_id
+        DomainPolicy.agent_id == policy.agent_id,
+        DomainPolicy.tenant_id == effective_tenant_id
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Policy for this domain already exists")
@@ -1203,9 +1596,10 @@ async def create_domain_policy(
     # Encrypt credential if provided
     encrypted_value = None
     if policy.credential:
-        encrypted_value = encrypt_value(policy.credential.value)
+        encrypted_value = encrypt_secret(policy.credential.value)
 
     db_policy = DomainPolicy(
+        tenant_id=effective_tenant_id,
         domain=policy.domain,
         alias=policy.alias,
         description=policy.description,
@@ -1223,6 +1617,121 @@ async def create_domain_policy(
     db.commit()
     db.refresh(db_policy)
     return domain_policy_to_response(db_policy)
+
+
+@app.get("/api/v1/domain-policies/for-domain")
+@limiter.limit("120/minute")
+async def get_policy_for_domain(
+    request: Request,
+    domain: str,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(verify_token)
+):
+    """Get complete policy for a domain (used by Envoy).
+
+    Returns all policy settings: paths, rate limits, egress limits, credentials.
+    Agent tokens receive policies scoped to their agent + global policies.
+    """
+    query = db.query(DomainPolicy).filter(DomainPolicy.enabled == True)
+
+    # Agent tokens only see their agent's policies + global policies
+    if token_info.token_type == "agent" and token_info.agent_id:
+        query = query.filter(
+            (DomainPolicy.agent_id == token_info.agent_id) | (DomainPolicy.agent_id.is_(None))
+        )
+
+    policies = query.all()
+
+    # Check for alias match first (devbox.local)
+    if domain.endswith(".devbox.local"):
+        alias = domain.replace(".devbox.local", "")
+        for policy in policies:
+            if policy.alias == alias:
+                # Build response with credential
+                result = build_policy_response(policy)
+                if policy.domain.startswith("*."):
+                    result["target_domain"] = policy.domain[2:]
+                else:
+                    result["target_domain"] = policy.domain
+                return result
+
+    # Find matching policy (agent-specific takes precedence)
+    matching_policy = None
+    for policy in policies:
+        if match_domain(policy.domain, domain):
+            if matching_policy is None or (policy.agent_id is not None and matching_policy.agent_id is None):
+                matching_policy = policy
+
+    if not matching_policy:
+        # Return defaults
+        default_rpm = int(os.environ.get('DEFAULT_RATE_LIMIT_RPM', '120'))
+        default_burst = int(os.environ.get('DEFAULT_RATE_LIMIT_BURST', '20'))
+        default_bytes = int(os.environ.get('DEFAULT_EGRESS_LIMIT_BYTES', '104857600'))
+        return {
+            "matched": False,
+            "domain": domain,
+            "allowed_paths": [],
+            "requests_per_minute": default_rpm,
+            "burst_size": default_burst,
+            "bytes_per_hour": default_bytes,
+            "header_name": None,
+            "header_value": None,
+        }
+
+    return build_policy_response(matching_policy)
+
+
+def build_policy_response(policy: DomainPolicy) -> dict:
+    """Build a policy response with decrypted credential."""
+    result = {
+        "matched": True,
+        "domain": policy.domain,
+        "alias": policy.alias,
+        "allowed_paths": policy.allowed_paths or [],
+        "requests_per_minute": policy.requests_per_minute or int(os.environ.get('DEFAULT_RATE_LIMIT_RPM', '120')),
+        "burst_size": policy.burst_size or int(os.environ.get('DEFAULT_RATE_LIMIT_BURST', '20')),
+        "bytes_per_hour": policy.bytes_per_hour or int(os.environ.get('DEFAULT_EGRESS_LIMIT_BYTES', '104857600')),
+        "header_name": None,
+        "header_value": None,
+    }
+
+    # Include credential if present
+    if policy.credential_value_encrypted:
+        try:
+            decrypted = decrypt_secret(policy.credential_value_encrypted)
+            formatted_value = policy.credential_format.replace("{value}", decrypted)
+            result["header_name"] = policy.credential_header
+            result["header_value"] = formatted_value
+        except Exception:
+            pass
+
+    return result
+
+
+@app.get("/api/v1/domain-policies/export")
+async def export_domain_policies(
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(verify_token)
+):
+    """Export all domains for CoreDNS allowlist.
+
+    Returns list of domains (without credentials) for DNS filtering.
+    """
+    query = db.query(DomainPolicy).filter(DomainPolicy.enabled == True)
+
+    # Agent tokens only see their agent's policies + global policies
+    if token_info.token_type == "agent" and token_info.agent_id:
+        query = query.filter(
+            (DomainPolicy.agent_id == token_info.agent_id) | (DomainPolicy.agent_id.is_(None))
+        )
+
+    policies = query.all()
+    domains = [p.domain for p in policies]
+
+    return {
+        "domains": domains,
+        "generated_at": datetime.utcnow().isoformat()
+    }
 
 
 @app.get("/api/v1/domain-policies/{policy_id}", response_model=DomainPolicyResponse)
@@ -1276,7 +1785,7 @@ async def update_domain_policy(
     elif update.credential:
         policy.credential_header = update.credential.header
         policy.credential_format = update.credential.format
-        policy.credential_value_encrypted = encrypt_value(update.credential.value)
+        policy.credential_value_encrypted = encrypt_secret(update.credential.value)
         policy.credential_rotated_at = datetime.utcnow()
 
     db.commit()
@@ -1316,111 +1825,11 @@ async def rotate_domain_policy_credential(
 
     policy.credential_header = credential.header
     policy.credential_format = credential.format
-    policy.credential_value_encrypted = encrypt_value(credential.value)
+    policy.credential_value_encrypted = encrypt_secret(credential.value)
     policy.credential_rotated_at = datetime.utcnow()
     db.commit()
     db.refresh(policy)
     return domain_policy_to_response(policy)
-
-
-@app.get("/api/v1/domain-policies/for-domain")
-@limiter.limit("120/minute")
-async def get_policy_for_domain(
-    request: Request,
-    domain: str,
-    db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(verify_token)
-):
-    """Get complete policy for a domain (used by Envoy).
-
-    Returns all policy settings: paths, rate limits, egress limits, credentials.
-    Agent tokens receive policies scoped to their agent + global policies.
-    """
-    query = db.query(DomainPolicy).filter(DomainPolicy.enabled == True)
-
-    # Agent tokens only see their agent's policies + global policies
-    if token_info.token_type == "agent" and token_info.agent_id:
-        query = query.filter(
-            (DomainPolicy.agent_id == token_info.agent_id) | (DomainPolicy.agent_id.is_(None))
-        )
-
-    policies = query.all()
-
-    # Find matching policy (agent-specific takes precedence)
-    matching_policy = None
-    for policy in policies:
-        if match_domain(policy.domain, domain):
-            if matching_policy is None or (policy.agent_id is not None and matching_policy.agent_id is None):
-                matching_policy = policy
-
-    if not matching_policy:
-        # Return defaults
-        default_rpm = int(os.environ.get('DEFAULT_RATE_LIMIT_RPM', '120'))
-        default_burst = int(os.environ.get('DEFAULT_RATE_LIMIT_BURST', '20'))
-        default_bytes = int(os.environ.get('DEFAULT_EGRESS_LIMIT_BYTES', '104857600'))
-        return {
-            "matched": False,
-            "domain": domain,
-            "allowed_paths": [],
-            "requests_per_minute": default_rpm,
-            "burst_size": default_burst,
-            "bytes_per_hour": default_bytes,
-            "credential": None
-        }
-
-    # Build response with decrypted credential
-    result = {
-        "matched": True,
-        "domain": matching_policy.domain,
-        "alias": matching_policy.alias,
-        "allowed_paths": matching_policy.allowed_paths or [],
-        "requests_per_minute": matching_policy.requests_per_minute or int(os.environ.get('DEFAULT_RATE_LIMIT_RPM', '120')),
-        "burst_size": matching_policy.burst_size or int(os.environ.get('DEFAULT_RATE_LIMIT_BURST', '20')),
-        "bytes_per_hour": matching_policy.bytes_per_hour or int(os.environ.get('DEFAULT_EGRESS_LIMIT_BYTES', '104857600')),
-        "credential": None
-    }
-
-    # Include credential if present
-    if matching_policy.credential_value_encrypted:
-        try:
-            decrypted = decrypt_value(matching_policy.credential_value_encrypted)
-            formatted_value = matching_policy.credential_format.replace("{value}", decrypted)
-            result["credential"] = {
-                "header_name": matching_policy.credential_header,
-                "header_value": formatted_value,
-                "target_domain": matching_policy.domain if not matching_policy.domain.startswith("*") else None
-            }
-        except Exception as e:
-            # Log error but don't fail request
-            pass
-
-    return result
-
-
-@app.get("/api/v1/domain-policies/export")
-async def export_domain_policies(
-    db: Session = Depends(get_db),
-    token_info: TokenInfo = Depends(verify_token)
-):
-    """Export all domains for CoreDNS allowlist.
-
-    Returns list of domains (without credentials) for DNS filtering.
-    """
-    query = db.query(DomainPolicy).filter(DomainPolicy.enabled == True)
-
-    # Agent tokens only see their agent's policies + global policies
-    if token_info.token_type == "agent" and token_info.agent_id:
-        query = query.filter(
-            (DomainPolicy.agent_id == token_info.agent_id) | (DomainPolicy.agent_id.is_(None))
-        )
-
-    policies = query.all()
-    domains = [p.domain for p in policies]
-
-    return {
-        "domains": domains,
-        "generated_at": datetime.utcnow().isoformat()
-    }
 
 
 # =============================================================================
@@ -1429,12 +1838,14 @@ async def export_domain_policies(
 
 @app.get("/api/v1/agents", response_model=List[DataPlaneResponse])
 async def list_agents(
+    tenant_id: Optional[int] = Query(default=None, description="Filter by tenant (super admin only)"),
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(verify_token)
 ):
     """List all connected data planes (agents).
 
-    Super admins see all agents. Tenant admins see only their tenant's agents.
+    Super admins can filter by tenant_id, or see all agents if not specified.
+    Tenant admins see only their tenant's agents.
     Excludes __default__ virtual agents and soft-deleted agents from listing.
     """
     query = db.query(AgentState).filter(
@@ -1442,8 +1853,16 @@ async def list_agents(
         AgentState.deleted_at.is_(None)  # Exclude soft-deleted
     )
 
-    # Non-super-admin can only see agents for their tenant
-    if not token_info.is_super_admin and token_info.tenant_id:
+    # Apply tenant filtering
+    if token_info.is_super_admin:
+        # Super admin can optionally filter by tenant
+        if tenant_id is not None:
+            query = query.filter(AgentState.tenant_id == tenant_id)
+        # else: no filter, see all agents
+    else:
+        # Non-super-admin MUST be scoped to their tenant
+        if not token_info.tenant_id:
+            raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
         query = query.filter(AgentState.tenant_id == token_info.tenant_id)
 
     agents = query.all()
@@ -1475,9 +1894,14 @@ def get_or_create_agent_state(db: Session, agent_id: str = "default", tenant_id:
 
     If an agent was soft-deleted and tries to reconnect, it is restored
     but needs re-approval.
+
+    tenant_id is required when creating a new agent. Existing agents already
+    have tenant_id in the database.
     """
     state = db.query(AgentState).filter(AgentState.agent_id == agent_id).first()
     if not state:
+        if tenant_id is None:
+            raise ValueError(f"tenant_id is required when creating new agent: {agent_id}")
         state = AgentState(agent_id=agent_id, tenant_id=tenant_id)
         db.add(state)
         db.commit()
@@ -1538,7 +1962,8 @@ async def agent_heartbeat(
             user="agent-manager",
             action=f"Agent {heartbeat.last_command}: {heartbeat.last_command_result}",
             details=heartbeat.last_command_message,
-            severity="INFO" if heartbeat.last_command_result == "success" else "WARNING"
+            severity="INFO" if heartbeat.last_command_result == "success" else "WARNING",
+            tenant_id=state.tenant_id
         )
         db.add(log)
 
@@ -1589,7 +2014,8 @@ async def queue_agent_wipe(
         event_type="agent_wipe_requested",
         user=token_info.token_name or "admin",
         action=f"Wipe requested for {agent_id} (workspace={'wipe' if body.wipe_workspace else 'preserve'})",
-        severity="WARNING"
+        severity="WARNING",
+        tenant_id=get_audit_tenant_id(token_info, db, state)
     )
     db.add(log)
     db.commit()
@@ -1749,7 +2175,8 @@ async def approve_agent(
         event_type="agent_approved",
         user=token_info.token_name or "admin",
         action=f"Agent {agent_id} approved",
-        severity="INFO"
+        severity="INFO",
+        tenant_id=get_audit_tenant_id(token_info, db, state)
     )
     db.add(log)
     db.commit()
@@ -1781,7 +2208,8 @@ async def reject_agent(
         event_type="agent_rejected",
         user=token_info.token_name or "admin",
         action=f"Agent {agent_id} rejected and soft-deleted",
-        severity="WARNING"
+        severity="WARNING",
+        tenant_id=get_audit_tenant_id(token_info, db, state)
     )
     db.add(log)
 
@@ -1817,7 +2245,8 @@ async def revoke_agent(
         event_type="agent_revoked",
         user=token_info.token_name or "admin",
         action=f"Agent {agent_id} approval revoked",
-        severity="WARNING"
+        severity="WARNING",
+        tenant_id=get_audit_tenant_id(token_info, db, state)
     )
     db.add(log)
     db.commit()
@@ -1862,7 +2291,8 @@ async def generate_stcp_secret(
         event_type="stcp_secret_generated",
         user=token_info.token_name or "admin",
         action=f"STCP secret generated for agent {agent_id}",
-        severity="INFO"
+        severity="INFO",
+        tenant_id=get_audit_tenant_id(token_info, db, state)
     )
     db.add(log)
     db.commit()
@@ -2007,14 +2437,16 @@ async def terminal_websocket(
         )
         db.add(session_record)
 
-        # Audit log
+        # Audit log - use agent's tenant or token's tenant or system tenant
+        audit_tenant_id = db_token.tenant_id or get_system_tenant_id(db)
         log = AuditLog(
             event_type="terminal_session_start",
             user=db_token.name,
             container_id=agent_id,
             action=f"Terminal session started for agent {agent_id}",
             details=json.dumps({"session_id": session_id, "client_ip": client_ip}),
-            severity="INFO"
+            severity="INFO",
+            tenant_id=audit_tenant_id
         )
         db.add(log)
         db.commit()
@@ -2092,7 +2524,8 @@ async def terminal_websocket(
                     "bytes_sent": bytes_sent if 'bytes_sent' in locals() else 0,
                     "bytes_received": bytes_received if 'bytes_received' in locals() else 0
                 }),
-                severity="INFO"
+                severity="INFO",
+                tenant_id=audit_tenant_id if 'audit_tenant_id' in locals() else get_system_tenant_id(db)
             )
             db.add(log)
             db.commit()
@@ -2117,7 +2550,9 @@ async def list_terminal_sessions(
         query = query.filter(TerminalSession.agent_id == agent_id)
 
     # Tenant isolation
-    if not token_info.is_super_admin and token_info.tenant_id:
+    if not token_info.is_super_admin:
+        if not token_info.tenant_id:
+            raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
         query = query.filter(TerminalSession.tenant_id == token_info.tenant_id)
 
     return query.limit(limit).all()
@@ -2190,12 +2625,13 @@ async def create_tenant(
     )
     db.add(default_agent)
 
-    # Log tenant creation
+    # Log tenant creation (super admin action - use __system__ tenant)
     log = AuditLog(
         event_type="tenant_created",
         user=token_info.token_name,
         action=f"Created tenant '{request.name}' (slug: {request.slug})",
-        severity="info"
+        severity="info",
+        tenant_id=get_system_tenant_id(db)
     )
     db.add(log)
     db.commit()
@@ -2272,12 +2708,13 @@ async def delete_tenant(
     # Soft-delete tenant
     tenant.deleted_at = now
 
-    # Log deletion
+    # Log deletion (super admin action - use __system__ tenant)
     log = AuditLog(
         event_type="tenant_deleted",
         user=token_info.token_name,
         action=f"Soft-deleted tenant '{tenant.name}' and {agent_count} agents",
-        severity="warning"
+        severity="warning",
+        tenant_id=get_system_tenant_id(db)
     )
     db.add(log)
     db.commit()
@@ -2364,13 +2801,14 @@ async def create_tenant_ip_acl(
     )
     db.add(db_acl)
 
-    # Audit log
+    # Audit log (use the tenant being modified)
     log = AuditLog(
         event_type="ip_acl_created",
         user=token_info.token_name or "admin",
         action=f"IP ACL created for tenant {tenant_id}: {acl.cidr}",
         details=json.dumps({"tenant_id": tenant_id, "cidr": acl.cidr}),
-        severity="INFO"
+        severity="INFO",
+        tenant_id=tenant_id
     )
     db.add(log)
     db.commit()
@@ -2406,13 +2844,14 @@ async def update_tenant_ip_acl(
     if acl.enabled is not None:
         db_acl.enabled = acl.enabled
 
-    # Audit log
+    # Audit log (use the tenant being modified)
     log = AuditLog(
         event_type="ip_acl_updated",
         user=token_info.token_name or "admin",
         action=f"IP ACL updated for tenant {tenant_id}: {db_acl.cidr}",
         details=json.dumps({"acl_id": acl_id, "changes": acl.dict(exclude_unset=True)}),
-        severity="INFO"
+        severity="INFO",
+        tenant_id=tenant_id
     )
     db.add(log)
     db.commit()
@@ -2443,13 +2882,14 @@ async def delete_tenant_ip_acl(
     cidr = db_acl.cidr  # Save for logging
     db.delete(db_acl)
 
-    # Audit log
+    # Audit log (use the tenant being modified)
     log = AuditLog(
         event_type="ip_acl_deleted",
         user=token_info.token_name or "admin",
         action=f"IP ACL deleted for tenant {tenant_id}: {cidr}",
         details=json.dumps({"acl_id": acl_id, "cidr": cidr}),
-        severity="WARNING"
+        severity="WARNING",
+        tenant_id=tenant_id
     )
     db.add(log)
     db.commit()
@@ -2463,17 +2903,27 @@ async def delete_tenant_ip_acl(
 
 @app.get("/api/v1/tokens", response_model=List[ApiTokenResponse])
 async def list_tokens(
+    tenant_id: Optional[int] = Query(default=None, description="Filter by tenant (super admin only)"),
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin_role)
 ):
     """List all API tokens.
 
-    Super admins see all tokens. Tenant admins see only their tenant's tokens.
+    Super admins can filter by tenant_id, or see all tokens if not specified.
+    Tenant admins see only their tenant's tokens.
     """
     query = db.query(ApiToken)
 
-    # Non-super-admin can only see tokens for their tenant
-    if not token_info.is_super_admin and token_info.tenant_id:
+    # Apply tenant filtering
+    if token_info.is_super_admin:
+        # Super admin can optionally filter by tenant
+        if tenant_id is not None:
+            query = query.filter(ApiToken.tenant_id == tenant_id)
+        # else: no filter, see all tokens
+    else:
+        # Non-super-admin MUST be scoped to their tenant
+        if not token_info.tenant_id:
+            raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
         query = query.filter(ApiToken.tenant_id == token_info.tenant_id)
 
     tokens = query.all()
@@ -2584,13 +3034,14 @@ async def create_token(
     )
     db.add(db_token)
 
-    # Log token creation
+    # Log token creation (use the token's tenant or system tenant for super admin actions)
     log = AuditLog(
         event_type="token_created",
         user=token_info.token_name or "admin",
         action=f"Token '{body.name}' created (type={body.token_type}, roles={roles_str}, super_admin={body.is_super_admin})",
         details=f"agent_id={body.agent_id}, tenant_id={new_tenant_id}" if body.agent_id else f"tenant_id={new_tenant_id}",
-        severity="INFO"
+        severity="INFO",
+        tenant_id=new_tenant_id if new_tenant_id else get_system_tenant_id(db)
     )
     db.add(log)
     db.commit()
@@ -2622,13 +3073,15 @@ async def delete_token(
         raise HTTPException(status_code=404, detail="Token not found")
 
     token_name = db_token.name
+    deleted_token_tenant_id = db_token.tenant_id
 
-    # Log token deletion
+    # Log token deletion (use the deleted token's tenant or system tenant)
     log = AuditLog(
         event_type="token_deleted",
         user=token_info.token_name or "admin",
         action=f"Token '{token_name}' deleted",
-        severity="WARNING"
+        severity="WARNING",
+        tenant_id=deleted_token_tenant_id if deleted_token_tenant_id else get_system_tenant_id(db)
     )
     db.add(log)
 
@@ -2653,13 +3106,14 @@ async def update_token(
     if enabled is not None:
         db_token.enabled = enabled
 
-        # Log the change
+        # Log the change (use the token's tenant or system tenant)
         action = "enabled" if enabled else "disabled"
         log = AuditLog(
             event_type=f"token_{action}",
             user=token_info.token_name or "admin",
             action=f"Token '{db_token.name}' {action}",
-            severity="INFO"
+            severity="INFO",
+            tenant_id=db_token.tenant_id if db_token.tenant_id else get_system_tenant_id(db)
         )
         db.add(log)
 

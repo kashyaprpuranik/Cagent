@@ -364,3 +364,60 @@ curl -X DELETE http://localhost:8002/api/v1/egress-limits/1 \
 | 100 MB | 104857600 |
 | 500 MB | 524288000 |
 | 1 GB | 1073741824 |
+
+## Log Querying
+
+Agent logs (Envoy, CoreDNS, gVisor, container stdout/stderr) are queryable via the Control Plane API.
+
+### Tenant Filtering
+
+Logs are automatically filtered by tenant:
+- **Super admins**: Can query all logs, optionally filter by `tenant_id`
+- **Tenant admins/developers**: Only see logs from their tenant's agents
+- **Agent-specific queries**: Verified against user's tenant access
+
+```bash
+# Query logs (filtered to your tenant automatically)
+curl "http://localhost:8002/api/v1/logs/query?source=envoy&limit=100" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Super admin: query specific tenant
+curl "http://localhost:8002/api/v1/logs/query?tenant_id=1&source=gvisor" \
+  -H "Authorization: Bearer $SUPER_ADMIN_TOKEN"
+
+# Query specific agent (must have access)
+curl "http://localhost:8002/api/v1/logs/query?agent_id=prod-agent&source=agent" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Log Sources
+
+| Source | Description |
+|--------|-------------|
+| `envoy` | HTTP proxy access logs (method, path, response code) |
+| `coredns` | DNS query logs |
+| `gvisor` | Syscall audit logs (if using gVisor runtime) |
+| `agent` | Container stdout/stderr |
+| `agent-manager` | Agent manager service logs |
+
+### Log Ingestion (Agent Tokens)
+
+Data planes send logs to the Control Plane, which injects trusted identity before forwarding to OpenObserve:
+
+```bash
+# Agent token sends logs to CP (not directly to OpenObserve)
+curl -X POST http://localhost:8002/api/v1/logs/ingest \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "logs": [
+      {"message": "Request completed", "source": "envoy", "level": "info"},
+      {"message": "DNS query: api.openai.com", "source": "coredns"}
+    ]
+  }'
+```
+
+This architecture ensures:
+- Data planes never have OpenObserve credentials
+- `agent_id` and `tenant_id` are injected from verified token
+- Agents cannot spoof their identity in logs

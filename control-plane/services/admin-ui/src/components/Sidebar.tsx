@@ -11,8 +11,10 @@ import {
   Network,
   Globe,
   LucideIcon,
+  ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import { api } from '../api/client';
 
 interface NavItem {
@@ -56,6 +58,7 @@ const navSections: NavSection[] = [
 
 export function Sidebar() {
   const { user, refresh } = useAuth();
+  const { selectedTenant, tenants, canSwitch, setSelectedTenantId, loading: tenantLoading } = useTenant();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -82,6 +85,38 @@ export function Sidebar() {
         <p className="text-sm text-dark-500">
           {user?.is_super_admin ? 'Super Admin' : hasAdminRole ? 'Admin' : 'Developer'}
         </p>
+      </div>
+
+      {/* Tenant selector/display */}
+      <div className="px-4 py-3 border-b border-dark-700">
+        <label className="text-xs font-semibold text-dark-500 uppercase tracking-wider block mb-2">
+          Tenant
+        </label>
+        {tenantLoading ? (
+          <div className="text-sm text-dark-400">Loading...</div>
+        ) : canSwitch ? (
+          <div className="relative">
+            <select
+              value={selectedTenant?.id || ''}
+              onChange={(e) => setSelectedTenantId(Number(e.target.value))}
+              className="w-full appearance-none bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 pr-8 text-sm text-dark-100 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer"
+            >
+              {tenants.map((tenant) => (
+                <option key={tenant.id} value={tenant.id}>
+                  {tenant.name} ({tenant.slug})
+                </option>
+              ))}
+            </select>
+            <ChevronDown
+              size={16}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 pointer-events-none"
+            />
+          </div>
+        ) : (
+          <div className="bg-dark-800 border border-dark-700 rounded-lg px-3 py-2 text-sm text-dark-300">
+            {selectedTenant?.name || 'Default'}
+          </div>
+        )}
       </div>
       <nav className="flex-1 p-4 space-y-6 overflow-y-auto">
         {navSections.map((section) => {

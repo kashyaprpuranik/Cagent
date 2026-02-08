@@ -62,7 +62,7 @@ For production deployments, consider adding: API gateway with WAF, mandatory MFA
 | **Credential Hiding** | Agent never sees API keys; credentials injected by proxy at egress |
 | **Defense in Depth** | Multiple layers: network, container, optional kernel (gVisor) isolation |
 | **Least Privilege** | Minimal capabilities, read-only filesystem, resource limits |
-| **Audit Everything** | All HTTP requests, DNS queries, and syscalls logged |
+| **Audit Everything** | All HTTP requests, DNS queries, and syscalls logged (via CP for trusted identity) |
 
 ## Hardening Details
 
@@ -238,10 +238,11 @@ Run with centralized management via the control plane. Ideal for multiple tenant
 |                |                     |                 |                        |
 │             (can run on client laptop or server or provider servers)            │
 │                │                     │                 ▼                        │
-│  ┌─────────────┴────────-───┐  ┌─────┴─-──────┐  ┌─────────────────┐            │
-│  │      Agent Manager       │  │    Vector    │  │   FRP Client    │            │
-│  │ polls CP, syncs configs  │  │    (logs)    │  │ (STCP to CP)    │            │
-│  └──────────────────────────┘  └──────────────┘  └────────-┬───────┘            │
+│  ┌─────────────┴────────-───┐                   ┌─────────────────┐            │
+│  │      Agent Manager       │                   │   FRP Client    │            │
+│  │ polls CP, syncs configs  │                   │ (STCP to CP)    │            │
+│  │ ships logs to CP         │                   └────────-┬───────┘            │
+│  └──────────────────────────┘                             │                    │
 │                                                            │                    │
 │  ┌─────────────────────────────────────────────────────────┼──────────────────┐ │
 │  │                        agent-net (isolated)             │                  │ │
@@ -291,9 +292,9 @@ export AGENT_ID=my-agent-01  # Unique ID for this data plane
 
 docker-compose up -d
 
-# With log shipping to OpenObserve:
-export OPENOBSERVE_HOST=<control-plane-ip>
-docker-compose --profile auditing up -d
+# Log shipping is automatic - logs are sent to CP which forwards to OpenObserve
+# No OPENOBSERVE credentials needed on data plane (CP-mediated for security)
+docker-compose --profile standard up -d
 ```
 
 **3. Accessing the Agent**

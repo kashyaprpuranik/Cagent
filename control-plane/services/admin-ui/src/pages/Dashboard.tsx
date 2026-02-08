@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { Card, Badge, Button, Modal } from '../components/common';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import {
   useHealth,
   useDataPlanes,
@@ -32,9 +33,11 @@ import {
 
 export function Dashboard() {
   const { user } = useAuth();
+  const { selectedTenantId } = useTenant();
   const navigate = useNavigate();
   const { data: health } = useHealth();
-  const { data: dataPlanes, refetch: refetchDataPlanes } = useDataPlanes();
+  // Pass tenant filter - super admins see agents for selected tenant, others see their tenant's agents
+  const { data: dataPlanes, refetch: refetchDataPlanes } = useDataPlanes(selectedTenantId);
 
   // Check if user has developer role for terminal access
   const hasDeveloperRole = user?.roles?.includes('developer') || user?.is_super_admin;

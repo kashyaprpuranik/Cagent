@@ -67,7 +67,9 @@ Adds agent-manager and local admin UI for browser-based management.
 
 ### Control Plane Mode
 
-Adds Vector for log shipping and connects to centralized control plane.
+Connects to centralized control plane for configuration and log shipping.
+
+**Log Flow**: Agent logs are shipped to the Control Plane API, which injects trusted `agent_id` and `tenant_id` before forwarding to OpenObserve. This ensures data planes cannot spoof their identity and prevents exposure of OpenObserve credentials.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

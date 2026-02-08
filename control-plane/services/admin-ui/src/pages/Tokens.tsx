@@ -21,11 +21,14 @@ import {
   useTenants,
 } from '../hooks/useApi';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import type { CreateApiTokenRequest, ApiTokenCreated } from '../types/api';
 
 export function Tokens() {
   const { user } = useAuth();
-  const { data: tokens, isLoading } = useTokens();
+  const { selectedTenantId } = useTenant();
+  // Pass tenant filter - super admins see tokens for selected tenant, others see their tenant's tokens
+  const { data: tokens, isLoading } = useTokens(selectedTenantId);
   // Only super admins can see tenants list (for tenant dropdown in create modal)
   const { data: tenants } = useTenants(user?.is_super_admin === true);
   const createToken = useCreateToken();

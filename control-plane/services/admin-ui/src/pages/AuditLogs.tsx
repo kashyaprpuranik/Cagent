@@ -1,16 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card, Table, Input, Select, Badge } from '../components/common';
 import { useAuditLogs } from '../hooks/useApi';
+import { useTenant } from '../contexts/TenantContext';
 import type { AuditLog, AuditLogFilters } from '../types/api';
 
 export function AuditLogs() {
+  const { selectedTenantId } = useTenant();
   const [filters, setFilters] = useState<AuditLogFilters>({
     limit: 25,
     offset: 0,
   });
 
-  const { data, isLoading } = useAuditLogs(filters);
+  // Update filters when tenant changes
+  useEffect(() => {
+    if (selectedTenantId !== null) {
+      setFilters(prev => ({ ...prev, tenant_id: selectedTenantId, offset: 0 }));
+    }
+  }, [selectedTenantId]);
+
+  const { data, isLoading } = useAuditLogs(selectedTenantId !== null ? { ...filters, tenant_id: selectedTenantId } : filters);
   const logs = data?.items || [];
   const total = data?.total || 0;
 

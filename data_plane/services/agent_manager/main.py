@@ -29,14 +29,7 @@ import docker
 import requests
 import yaml
 
-# Add config-generator to path
-sys.path.insert(0, '/app/services/config_generator')
-try:
-    from config_generator import ConfigGenerator
-except ImportError:
-    # Fallback for local development
-    sys.path.insert(0, str(Path(__file__).parent.parent / 'config_generator'))
-    from config_generator import ConfigGenerator
+from config_generator import ConfigGenerator
 
 # Configure logging
 logging.basicConfig(
@@ -49,10 +42,9 @@ logger = logging.getLogger(__name__)
 DATAPLANE_MODE = os.environ.get("DATAPLANE_MODE", "standalone")  # 'standalone' or 'connected'
 CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://control-plane-api:8000")
 CONTROL_PLANE_TOKEN = os.environ.get("CONTROL_PLANE_TOKEN", "")
-AGENT_CONTAINER_NAME = os.environ.get("AGENT_CONTAINER_NAME", "agent")
-AGENT_WORKSPACE_VOLUME = os.environ.get("AGENT_WORKSPACE_VOLUME", "data_plane_agent-workspace")
+AGENT_CONTAINER_NAME = "agent"
+AGENT_WORKSPACE_VOLUME = "data_plane_agent-workspace"
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "30"))
-AGENT_ID = os.environ.get("AGENT_ID", "default")
 
 # Config paths
 CAGENT_CONFIG_PATH = os.environ.get("CAGENT_CONFIG_PATH", "/etc/cagent/cagent.yaml")
@@ -61,11 +53,6 @@ ENVOY_CONFIG_PATH = os.environ.get("ENVOY_CONFIG_PATH", "/etc/envoy/envoy.yaml")
 
 # Sync configuration
 CONFIG_SYNC_INTERVAL = int(os.environ.get("CONFIG_SYNC_INTERVAL", "300"))  # 5 minutes
-
-# Legacy paths (for backwards compatibility)
-ALLOWLIST_SYNC_INTERVAL = CONFIG_SYNC_INTERVAL
-COREDNS_ALLOWLIST_PATH = os.environ.get("COREDNS_ALLOWLIST_PATH", "/etc/coredns/allowlist.hosts")
-STATIC_ALLOWLIST_PATH = os.environ.get("STATIC_ALLOWLIST_PATH", "/etc/coredns/static-allowlist.hosts")
 
 # Config generator instance
 config_generator = ConfigGenerator(CAGENT_CONFIG_PATH)
@@ -222,8 +209,8 @@ def execute_command(command: str, args: Optional[dict] = None) -> tuple:
         return False, str(e)
 
 
-COREDNS_CONTAINER_NAME = os.environ.get("COREDNS_CONTAINER_NAME", "dns-filter")
-ENVOY_CONTAINER_NAME = os.environ.get("ENVOY_CONTAINER_NAME", "envoy")
+COREDNS_CONTAINER_NAME = "dns-filter"
+ENVOY_CONTAINER_NAME = "envoy-proxy"
 
 
 def restart_coredns():
@@ -349,10 +336,6 @@ def sync_config() -> bool:
         return False
 
 
-# Keep old name for backwards compatibility
-sync_allowlist = sync_config
-
-
 def send_heartbeat() -> Optional[dict]:
     """Send heartbeat to control plane, return any pending command."""
     global last_command_result
@@ -408,7 +391,6 @@ def main_loop():
 
     logger.info("Agent manager starting")
     logger.info(f"  Mode: {DATAPLANE_MODE}")
-    logger.info(f"  Agent ID: {AGENT_ID}")
     logger.info(f"  Config file: {CAGENT_CONFIG_PATH}")
     logger.info(f"  CoreDNS config: {COREDNS_COREFILE_PATH}")
     logger.info(f"  Envoy config: {ENVOY_CONFIG_PATH}")

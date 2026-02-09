@@ -438,6 +438,58 @@ async def generate_stcp_secret(
     return STCPSecretResponse(
         agent_id=agent_id,
         secret_key=secret,  # Only returned once!
+        proxy_name=f"{agent_id}-ssh",
+        message="Save this secret - it will not be shown again. Use it as STCP_SECRET_KEY in data plane .env"
+    )
+
+
+@router.post("/api/v1/agent/stcp-secret", response_model=STCPSecretResponse)
+@limiter.limit("10/minute")
+async def generate_stcp_secret_from_token(
+    request: Request,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(verify_token)
+):
+    """Generate STCP secret, deriving agent_id from token.
+
+    For agent tokens, agent_id is embedded in the token.
+    For admin tokens, agent_id can be passed as a query parameter.
+    This is the preferred endpoint for data plane setup scripts.
+    """
+    if token_info.token_type == "agent":
+        agent_id = token_info.agent_id
+        if not agent_id:
+            raise HTTPException(status_code=400, detail="Agent token missing agent_id")
+    else:
+        raise HTTPException(status_code=403, detail="This endpoint requires an agent token. Use /api/v1/agents/{agent_id}/stcp-secret with an admin token.")
+
+    state = db.query(AgentState).filter(
+        AgentState.agent_id == agent_id,
+        AgentState.deleted_at.is_(None)
+    ).first()
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+
+    # Generate cryptographically secure secret
+    secret = secrets.token_urlsafe(32)
+    state.stcp_secret_key = encrypt_secret(secret)
+    db.commit()
+
+    # Log the action
+    log = AuditLog(
+        event_type="stcp_secret_generated",
+        user=token_info.token_name or "agent",
+        action=f"STCP secret generated for agent {agent_id}",
+        severity="INFO",
+        tenant_id=get_audit_tenant_id(token_info, db, state)
+    )
+    db.add(log)
+    db.commit()
+
+    return STCPSecretResponse(
+        agent_id=agent_id,
+        secret_key=secret,
+        proxy_name=f"{agent_id}-ssh",
         message="Save this secret - it will not be shown again. Use it as STCP_SECRET_KEY in data plane .env"
     )
 

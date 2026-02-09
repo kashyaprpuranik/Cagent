@@ -236,6 +236,7 @@ class STCPSecretResponse(BaseModel):
     """Response when generating STCP secret."""
     agent_id: str
     secret_key: str  # Only returned once on generation
+    proxy_name: str  # FRP proxy name ("{agent_id}-ssh")
     message: str
 
 

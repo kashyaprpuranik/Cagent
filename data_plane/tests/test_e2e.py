@@ -202,14 +202,14 @@ class TestCredentialInjection:
 class TestLogging:
     """Test log collection."""
 
-    def test_fluent_bit_running(self, data_plane_running):
-        """Fluent-bit should be running for log collection."""
+    def test_vector_running(self, data_plane_running):
+        """Vector should be running for log collection."""
         result = subprocess.run(
-            ["docker", "ps", "--filter", "name=fluent-bit", "--format", "{{.Status}}"],
+            ["docker", "ps", "--filter", "name=vector", "--format", "{{.Status}}"],
             capture_output=True,
             text=True
         )
-        assert "Up" in result.stdout, "Fluent-bit is not running"
+        assert "Up" in result.stdout, "Vector is not running"
 
     def test_envoy_logs_exist(self, data_plane_running):
         """Envoy should be generating access logs."""

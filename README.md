@@ -294,7 +294,6 @@ cd data_plane
 
 export CONTROL_PLANE_URL=http://<control-plane-ip>:8002
 export CONTROL_PLANE_TOKEN=<agent-token>  # Token created in step 2
-export AGENT_ID=my-agent-01               # Unique ID for this data plane
 
 # Recommended: with gVisor
 docker-compose --profile standard up -d
@@ -319,7 +318,7 @@ The web terminal is the easiest - just open the Admin UI and click Terminal.
 For SSH access in Control Plane Mode (remote data planes):
 ```bash
 cd data_plane
-./scripts/setup-ssh-tunnel.sh --control-plane http://<cp-ip>:8002 --token admin-token
+./scripts/setup_ssh_tunnel.sh --control-plane http://<cp-ip>:8002 --token admin-token
 ```
 
 Or manually:

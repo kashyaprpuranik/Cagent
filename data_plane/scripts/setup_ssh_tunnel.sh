@@ -5,17 +5,16 @@
 #
 # Sets up SSH tunnel access to the agent container via STCP.
 # This script:
-#   1. Generates STCP secret via control plane API
+#   1. Generates STCP secret via control plane API (agent_id derived from token)
 #   2. Updates .env with tunnel configuration
 #   3. Restarts the frpc container
 #
 # Usage:
-#   ./setup-ssh-tunnel.sh [OPTIONS]
+#   ./setup_ssh_tunnel.sh [OPTIONS]
 #
 # Options:
 #   --control-plane URL    Control plane URL (default: from .env or localhost:8002)
-#   --token TOKEN          Admin token (default: from .env)
-#   --agent-id ID          Agent ID (default: from .env or "default")
+#   --token TOKEN          Agent token (default: from .env CONTROL_PLANE_TOKEN)
 #   --frp-server HOST      FRP server address (default: control plane host)
 #   --frp-port PORT        FRP server port (default: 7000)
 #
@@ -56,10 +55,6 @@ while [[ $# -gt 0 ]]; do
             CONTROL_PLANE_TOKEN="$2"
             shift 2
             ;;
-        --agent-id)
-            AGENT_ID="$2"
-            shift 2
-            ;;
         --frp-server)
             FRP_SERVER_ADDR="$2"
             shift 2
@@ -69,7 +64,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --help|-h)
-            head -30 "$0" | tail -25
+            head -25 "$0" | tail -20
             exit 0
             ;;
         *)
@@ -81,7 +76,6 @@ done
 
 # Defaults
 CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-http://localhost:8002}"
-AGENT_ID="${AGENT_ID:-default}"
 FRP_SERVER_PORT="${FRP_SERVER_PORT:-7000}"
 
 # Extract host from control plane URL for FRP server default
@@ -99,18 +93,17 @@ echo ""
 log_info "STCP SSH Tunnel Setup"
 echo "======================================"
 echo "Control Plane: $CONTROL_PLANE_URL"
-echo "Agent ID:      $AGENT_ID"
 echo "FRP Server:    $FRP_SERVER_ADDR:$FRP_SERVER_PORT"
 echo ""
 
 # =============================================================================
-# Step 1: Generate STCP secret
+# Step 1: Generate STCP secret (agent_id derived from token)
 # =============================================================================
 
 log_step "Generating STCP secret via control plane API..."
 
 RESPONSE=$(curl -s -X POST \
-    "${CONTROL_PLANE_URL}/api/v1/agents/${AGENT_ID}/stcp-secret" \
+    "${CONTROL_PLANE_URL}/api/v1/agent/stcp-secret" \
     -H "Authorization: Bearer ${CONTROL_PLANE_TOKEN}" \
     -H "Content-Type: application/json" \
     -w "\n%{http_code}")
@@ -124,15 +117,19 @@ if [[ "$HTTP_CODE" != "200" ]]; then
     exit 1
 fi
 
-STCP_SECRET_KEY=$(echo "$BODY" | grep -o '"stcp_secret_key"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+STCP_SECRET_KEY=$(echo "$BODY" | grep -o '"secret_key"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+STCP_PROXY_NAME=$(echo "$BODY" | grep -o '"proxy_name"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+AGENT_ID=$(echo "$BODY" | grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
 
-if [[ -z "$STCP_SECRET_KEY" ]]; then
-    log_error "Failed to parse STCP secret from response"
+if [[ -z "$STCP_SECRET_KEY" || -z "$STCP_PROXY_NAME" ]]; then
+    log_error "Failed to parse STCP secret/proxy_name from response"
     echo "$BODY"
     exit 1
 fi
 
-log_info "Generated STCP secret: ${STCP_SECRET_KEY:0:8}..."
+log_info "Agent ID:    $AGENT_ID"
+log_info "Proxy name:  $STCP_PROXY_NAME"
+log_info "Secret:      ${STCP_SECRET_KEY:0:8}..."
 
 # =============================================================================
 # Step 2: Update .env file
@@ -156,9 +153,9 @@ update_env() {
 
 update_env "CONTROL_PLANE_URL" "$CONTROL_PLANE_URL"
 update_env "CONTROL_PLANE_TOKEN" "$CONTROL_PLANE_TOKEN"
-update_env "AGENT_ID" "$AGENT_ID"
 update_env "FRP_SERVER_ADDR" "$FRP_SERVER_ADDR"
 update_env "FRP_SERVER_PORT" "$FRP_SERVER_PORT"
+update_env "STCP_PROXY_NAME" "$STCP_PROXY_NAME"
 update_env "STCP_SECRET_KEY" "$STCP_SECRET_KEY"
 
 log_info "Updated .env with tunnel configuration"
@@ -207,9 +204,9 @@ serverAddr = "${FRP_SERVER_ADDR}"
 serverPort = ${FRP_SERVER_PORT}
 
 [[visitors]]
-name = "${AGENT_ID}-ssh-visitor"
+name = "${STCP_PROXY_NAME}-visitor"
 type = "stcp"
-serverName = "${AGENT_ID}-ssh"
+serverName = "${STCP_PROXY_NAME}"
 secretKey = "${STCP_SECRET_KEY}"
 bindAddr = "127.0.0.1"
 bindPort = 2222

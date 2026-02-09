@@ -298,11 +298,10 @@ All connections are outbound from data planes - no inbound ports needed on data 
 Note: Logs are shipped via the Control Plane API (port 8002), not directly to OpenObserve. This ensures agent identity is verified and prevents credential exposure on data planes.
 
 **Data plane configuration:**
-Each data plane needs a unique `AGENT_ID` in its `.env` file:
+Each data plane authenticates with its agent token (which maps to a unique agent_id on the control plane):
 ```bash
-AGENT_ID=workstation-1  # Unique identifier for this data plane
 CONTROL_PLANE_URL=http://control-plane-host:8002
-CONTROL_PLANE_TOKEN=your-token  # Agent token scoped to this agent_id
+CONTROL_PLANE_TOKEN=your-token  # Agent token (encodes agent_id)
 ```
 
 **Tenant-global configuration:**

@@ -30,12 +30,12 @@
 #
 #   infra-net (can reach control plane)
 #     └── envoy, dns-filter (bridged to agent-net)
-#     └── fluent-bit (log forwarding) - optional
+#     └── vector (log forwarding) - optional
 #
 # Security Controls:
 #   - Agent has no direct internet/CP access (IP bypass prevention)
 #   - Credential injection handled by Envoy Lua filter
-#   - Only Envoy and fluent-bit can reach control plane
+#   - Only Envoy and Vector can reach control plane
 #
 # =============================================================================
 
@@ -106,7 +106,7 @@ services:
       agent-net:
         ipv4_address: 172.30.0.20
 
-    # Capture output to Docker logs (read by fluent-bit)
+    # Capture output to Docker logs (read by Vector)
     logging:
       driver: json-file
       options:
@@ -204,8 +204,6 @@ services:
       - coredns-config:/etc/coredns
       # Static Corefile as initial fallback (until agent-manager syncs)
       - ./configs/coredns/Corefile:/etc/coredns/Corefile.default:ro
-      # Static allowlist as fallback
-      - ./configs/coredns/allowlist.hosts:/etc/coredns/static-allowlist.hosts:ro
 
     # Use generated Corefile, fall back to default if not present
     command: ["-conf", "/etc/coredns/Corefile"]
@@ -243,7 +241,7 @@ services:
       # Control plane authentication token (for connected mode Lua filter)
       - CONTROL_PLANE_TOKEN=${CONTROL_PLANE_TOKEN:-}
 
-    # JSON logs to stdout (captured by Docker, read by fluent-bit)
+    # JSON logs to stdout (captured by Docker, read by Vector)
     logging:
       driver: json-file
       options:
@@ -287,13 +285,9 @@ services:
       - /var/log/runsc:/var/log/runsc:ro
 
     environment:
-      # OpenObserve connection (control plane)
-      - OPENOBSERVE_HOST=${OPENOBSERVE_HOST}
-      - OPENOBSERVE_PORT=${OPENOBSERVE_PORT:-5080}
-      - OPENOBSERVE_USER=${OPENOBSERVE_USER:-admin@cagent.local}
-      - OPENOBSERVE_PASSWORD=${OPENOBSERVE_PASSWORD:-admin}
-      # Metadata
-      - AGENT_ID=${AGENT_ID:-default}
+      # Control plane API (CP-mediated log ingestion)
+      - CONTROL_PLANE_URL=${CONTROL_PLANE_URL}
+      - CONTROL_PLANE_TOKEN=${CONTROL_PLANE_TOKEN}
       - ENVIRONMENT=${ENVIRONMENT:-development}
 
     command: ["--config", "/etc/vector/vector.yaml"]
@@ -325,26 +319,17 @@ services:
       - admin  # Admin UI benefits from agent-manager for config reload
 
     environment:
-      - AGENT_CONTAINER_NAME=agent
-      - AGENT_WORKSPACE_VOLUME=data_plane_agent-workspace
       # Operation mode: "standalone" or "connected"
       - DATAPLANE_MODE=${DATAPLANE_MODE:-standalone}
       # Control plane connection (for connected mode)
       - CONTROL_PLANE_URL=${CONTROL_PLANE_URL}
       - CONTROL_PLANE_TOKEN=${CONTROL_PLANE_TOKEN}
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30}
-      - AGENT_ID=${AGENT_ID:-default}
       # Config paths
       - CAGENT_CONFIG_PATH=/etc/cagent/cagent.yaml
       - COREDNS_COREFILE_PATH=/etc/coredns/Corefile
       - ENVOY_CONFIG_PATH=/etc/envoy/envoy.yaml
       - CONFIG_SYNC_INTERVAL=${CONFIG_SYNC_INTERVAL:-300}
-      # Container names for reload
-      - COREDNS_CONTAINER_NAME=dns-filter
-      - ENVOY_CONTAINER_NAME=envoy-proxy
-      # Legacy (for backwards compatibility)
-      - COREDNS_ALLOWLIST_PATH=/etc/coredns/allowlist.hosts
-      - STATIC_ALLOWLIST_PATH=/etc/coredns/static-allowlist.hosts
 
     volumes:
       # Docker socket for container management
@@ -355,8 +340,6 @@ services:
       - coredns-config:/etc/coredns
       # Envoy config volume (agent-manager writes generated config here)
       - envoy-config:/etc/envoy
-      # Static allowlist as fallback
-      - ./configs/coredns/allowlist.hosts:/etc/coredns/static-allowlist.hosts:ro
 
     # No ports exposed - polling-based, outbound only
     networks:
@@ -379,10 +362,6 @@ services:
 
     environment:
       - CAGENT_CONFIG_PATH=/etc/cagent/cagent.yaml
-      - AGENT_CONTAINER_NAME=agent
-      - COREDNS_CONTAINER_NAME=dns-filter
-      - ENVOY_CONTAINER_NAME=envoy-proxy
-      - FRPC_CONTAINER_NAME=frpc
       - DATA_PLANE_DIR=/app/data_plane
 
     volumes:
@@ -417,8 +396,8 @@ services:
       - FRP_SERVER_ADDR=${FRP_SERVER_ADDR}
       - FRP_SERVER_PORT=${FRP_SERVER_PORT:-7000}
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
-      - AGENT_ID=${AGENT_ID:-default}
-      - STCP_SECRET_KEY=${STCP_SECRET_KEY}  # Unique per agent, from control plane API
+      - STCP_PROXY_NAME=${STCP_PROXY_NAME}
+      - STCP_SECRET_KEY=${STCP_SECRET_KEY}
 
     volumes:
       - ./configs/frpc/frpc.toml:/etc/frp/frpc.toml:ro

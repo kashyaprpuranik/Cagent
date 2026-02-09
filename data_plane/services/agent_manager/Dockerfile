@@ -8,10 +8,7 @@ RUN pip install --no-cache-dir \
     pyyaml==6.0.1
 
 # Copy agent-manager code
-COPY agent_manager/main.py /app/
-
-# Copy config-generator module
-COPY config_generator/ /app/services/config_generator/
+COPY agent_manager/ /app/
 
 # Run as non-root for security
 RUN useradd -m -u 1000 appuser

@@ -293,7 +293,7 @@ Or configure manually:
 # In .env
 FRP_SERVER_ADDR=frp-server-host
 FRP_AUTH_TOKEN=your-token
-AGENT_ID=my-agent
+STCP_PROXY_NAME=my-agent-ssh    # From setup_ssh_tunnel.sh
 STCP_SECRET_KEY=generated-secret
 
 # Start with SSH profile
@@ -316,7 +316,7 @@ AGENT_VARIANT=lean  # or dev, ml
 ## Security Controls
 
 - **Network Isolation**: Agent on internal-only network (`internal: true`), no default gateway
-- **iptables Fallback**: Optional script adds explicit DROP rules (run `sudo ./scripts/network-hardening.sh`)
+- **iptables Fallback**: Optional script adds explicit DROP rules (run `sudo ./scripts/network_hardening.sh`)
 - **Seccomp Profile**: Blocks raw socket creation to prevent packet-crafting bypass
 - **IPv6 Disabled**: Prevents bypass of IPv4 egress controls
 - **DNS Filtering**: Only allowlisted domains resolve

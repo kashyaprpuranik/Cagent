@@ -1,7 +1,7 @@
 # =============================================================================
 # Vector Configuration - Data Plane Log Collection
 # Collects from: Docker containers, gVisor audit logs, agent app logs
-# Ships to: OpenObserve (control plane)
+# Ships to: Control Plane API (CP-mediated log ingestion)
 # =============================================================================
 
 data_dir: /var/lib/vector
@@ -83,13 +83,9 @@ transforms:
         }
       }
 
-      # Add metadata
-      .agent_id = get_env_var("AGENT_ID") ?? "default"
+      # Add metadata (agent_id is injected by CP from token)
       .hostname = get_env_var("HOSTNAME") ?? "unknown"
       .environment = get_env_var("ENVIRONMENT") ?? "development"
-
-      # OpenObserve stream routing
-      ._stream = .source
 
   # Parse gVisor logs (security audit)
   parse_gvisor:
@@ -98,7 +94,6 @@ transforms:
       - gvisor_logs
     source: |
       .source = "gvisor"
-      .agent_id = get_env_var("AGENT_ID") ?? "default"
       .hostname = get_env_var("HOSTNAME") ?? "unknown"
       .environment = get_env_var("ENVIRONMENT") ?? "development"
 
@@ -138,9 +133,6 @@ transforms:
         .level = "info"
       }
 
-      # OpenObserve stream - separate stream for security events
-      ._stream = "gvisor"
-
   # Parse agent app logs
   parse_agent_app:
     type: remap
@@ -149,7 +141,6 @@ transforms:
     source: |
       .source = "agent"
       .log_type = "app"
-      .agent_id = get_env_var("AGENT_ID") ?? "default"
       .hostname = get_env_var("HOSTNAME") ?? "unknown"
       .environment = get_env_var("ENVIRONMENT") ?? "development"
 
@@ -161,8 +152,6 @@ transforms:
       } else {
         .level = "info"
       }
-
-      ._stream = "agent"
 
   # Combine all parsed logs
   all_logs:
@@ -176,45 +165,73 @@ transforms:
       access: '.source == "envoy" && .log_type == "access"'
       _default: true
 
-# =============================================================================
-# SINKS
-# =============================================================================
-sinks:
-  # Primary: OpenObserve
-  openobserve:
-    type: http
+  # Format events for CP log ingestion API (POST /api/v1/logs/ingest)
+  format_for_cp:
+    type: remap
     inputs:
       - all_logs._default
       - all_logs.security
       - all_logs.access
-    uri: "http://${OPENOBSERVE_HOST:-host.docker.internal}:${OPENOBSERVE_PORT:-5080}/api/default/default/_json"
+    source: |
+      # Save core fields expected by LogBatch schema
+      ts = .timestamp
+      msg = string!(.message)
+      src = string(.source) ?? "unknown"
+      lvl = string(.level) ?? "info"
+
+      # Collect additional fields into extra
+      extra = {}
+      if exists(.log_type) { extra.log_type = .log_type }
+      if exists(.hostname) { extra.hostname = .hostname }
+      if exists(.environment) { extra.environment = .environment }
+      if exists(.method) { extra.method = .method }
+      if exists(.path) { extra.path = .path }
+      if exists(.upstream_host) { extra.upstream_host = .upstream_host }
+      if exists(.response_code) { extra.response_code = .response_code }
+      if exists(.duration_ms) { extra.duration_ms = .duration_ms }
+      if exists(.bytes_sent) { extra.bytes_sent = .bytes_sent }
+      if exists(.request_id) { extra.request_id = .request_id }
+      if exists(.syscall) { extra.syscall = .syscall }
+      if exists(.syscall_result) { extra.syscall_result = .syscall_result }
+
+      # Wrap in LogBatch schema: {"logs": [{...}]}
+      # batch.max_events=1 ensures one LogBatch per request
+      . = {"logs": [compact({"timestamp": ts, "message": msg, "source": src, "level": lvl, "extra": extra})]}
+
+# =============================================================================
+# SINKS
+# =============================================================================
+sinks:
+  # Primary: Control Plane API (CP-mediated log ingestion)
+  # CP injects agent_id and tenant_id from the bearer token, preventing
+  # a compromised data plane from spoofing identity or tampering with logs.
+  control_plane:
+    type: http
+    inputs:
+      - format_for_cp
+    uri: "${CONTROL_PLANE_URL}/api/v1/logs/ingest"
     method: post
     encoding:
       codec: json
     auth:
-      strategy: basic
-      user: "${OPENOBSERVE_USER:-admin@cagent.local}"
-      password: "${OPENOBSERVE_PASSWORD:-admin}"
+      strategy: bearer
+      token: "${CONTROL_PLANE_TOKEN}"
     batch:
-      max_bytes: 10485760
+      max_events: 1
       timeout_secs: 5
     request:
       headers:
         Content-Type: application/json
+      rate_limit_num: 80
+      rate_limit_duration_secs: 60
+      retry_initial_backoff_secs: 5
+      retry_max_duration_secs: 60
 
-  # Local file backup (if OpenObserve unreachable)
+  # Local file backup (if CP API unreachable)
   file_backup:
     type: file
     inputs:
-      - all_logs._default
+      - format_for_cp
     path: /var/log/vector/backup/%Y-%m-%d.log
     encoding:
       codec: json
-
-  # Console output for debugging (disable in production)
-  # console:
-  #   type: console
-  #   inputs:
-  #     - all_logs._default
-  #   encoding:
-  #     codec: json

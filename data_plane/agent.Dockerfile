@@ -174,7 +174,7 @@ WORKDIR /workspace
 COPY configs/agent/tmux.conf /etc/tmux.conf
 
 # Auto-attach to tmux on SSH login
-COPY configs/agent/profile.d/tmux-session.sh /etc/profile.d/99-tmux-session.sh
+COPY configs/agent/profile.d/tmux_session.sh /etc/profile.d/99-tmux-session.sh
 RUN chmod +x /etc/profile.d/99-tmux-session.sh
 
 # Session management helper
@@ -184,7 +184,7 @@ RUN chmod +x /usr/local/bin/session
 # =============================================================================
 # Entrypoint
 # =============================================================================
-COPY agent-entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY agent_entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 EXPOSE 22

@@ -199,7 +199,7 @@ curl -X POST http://localhost:8002/api/v1/domain-policies \
 
 ## Agent Management
 
-Via Admin UI dashboard or API. Agent ID is set via `AGENT_ID` environment variable in the data plane (defaults to "default").
+Via Admin UI dashboard or API. Agent identity is derived from the agent token — each token maps to a unique agent_id on the control plane.
 
 ```bash
 # List all connected agents

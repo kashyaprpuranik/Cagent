@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type {
-  AuditLogFilters,
+  AuditTrailFilters,
   CreateApiTokenRequest,
   CreateTenantRequest,
   CreateTenantIpAclRequest,
@@ -33,11 +33,11 @@ export function useDataPlanes(tenantId?: number | null) {
 // Alias for useDataPlanes - for use in forms/dropdowns
 export const useAgents = useDataPlanes;
 
-// Audit Logs
-export function useAuditLogs(filters: AuditLogFilters = {}) {
+// Audit Trail
+export function useAuditTrail(filters: AuditTrailFilters = {}) {
   return useQuery({
-    queryKey: ['auditLogs', filters],
-    queryFn: () => api.getAuditLogs(filters),
+    queryKey: ['auditTrail', filters],
+    queryFn: () => api.getAuditTrail(filters),
   });
 }
 

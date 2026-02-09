@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card, Table, Input, Select, Badge } from '../components/common';
-import { useAuditLogs } from '../hooks/useApi';
+import { useAuditTrail } from '../hooks/useApi';
 import { useTenant } from '../contexts/TenantContext';
-import type { AuditLog, AuditLogFilters } from '../types/api';
+import type { AuditTrailEntry, AuditTrailFilters } from '../types/api';
 
 const EVENT_TYPE_OPTIONS = [
   { value: '', label: 'All Events' },
@@ -13,7 +13,6 @@ const EVENT_TYPE_OPTIONS = [
   { value: 'ip_acl_created', label: 'IP ACL Created' },
   { value: 'ip_acl_updated', label: 'IP ACL Updated' },
   { value: 'ip_acl_deleted', label: 'IP ACL Deleted' },
-  { value: 'ip_acl_denied', label: 'IP ACL Denied' },
   { value: 'agent_wipe_requested', label: 'Agent Wipe' },
   { value: 'token_created', label: 'Token Created' },
   { value: 'token_deleted', label: 'Token Deleted' },
@@ -24,9 +23,9 @@ const EVENT_TYPE_OPTIONS = [
   { value: 'stcp_secret_generated', label: 'STCP Secret Generated' },
 ];
 
-export function AuditLogs() {
+export function AuditTrail() {
   const { selectedTenantId } = useTenant();
-  const [filters, setFilters] = useState<AuditLogFilters>({
+  const [filters, setFilters] = useState<AuditTrailFilters>({
     limit: 25,
     offset: 0,
   });
@@ -38,11 +37,11 @@ export function AuditLogs() {
     }
   }, [selectedTenantId]);
 
-  const { data, isLoading } = useAuditLogs(selectedTenantId !== null ? { ...filters, tenant_id: selectedTenantId } : filters);
+  const { data, isLoading } = useAuditTrail(selectedTenantId !== null ? { ...filters, tenant_id: selectedTenantId } : filters);
   const logs = data?.items || [];
   const total = data?.total || 0;
 
-  const updateFilter = (key: keyof AuditLogFilters, value: string | number) => {
+  const updateFilter = (key: keyof AuditTrailFilters, value: string | number) => {
     setFilters((prev) => ({
       ...prev,
       [key]: value,
@@ -68,7 +67,7 @@ export function AuditLogs() {
     {
       key: 'timestamp',
       header: 'Time',
-      render: (log: AuditLog) => (
+      render: (log: AuditTrailEntry) => (
         <span className="text-dark-400 text-sm whitespace-nowrap">
           {new Date(log.timestamp + 'Z').toLocaleString()}
         </span>
@@ -77,26 +76,26 @@ export function AuditLogs() {
     {
       key: 'severity',
       header: 'Severity',
-      render: (log: AuditLog) => getSeverityBadge(log.severity),
+      render: (log: AuditTrailEntry) => getSeverityBadge(log.severity),
     },
     {
       key: 'event_type',
       header: 'Event',
-      render: (log: AuditLog) => (
+      render: (log: AuditTrailEntry) => (
         <span className="font-medium text-dark-200">{log.event_type}</span>
       ),
     },
     {
       key: 'user',
       header: 'User',
-      render: (log: AuditLog) => (
+      render: (log: AuditTrailEntry) => (
         <span className="text-dark-300">{log.user || '-'}</span>
       ),
     },
     {
       key: 'action',
       header: 'Action',
-      render: (log: AuditLog) => (
+      render: (log: AuditTrailEntry) => (
         <code className="bg-dark-900 px-2 py-0.5 rounded text-xs">
           {log.action}
         </code>
@@ -105,7 +104,7 @@ export function AuditLogs() {
     {
       key: 'details',
       header: 'Details',
-      render: (log: AuditLog) => {
+      render: (log: AuditTrailEntry) => {
         if (!log.details) return <span className="text-dark-500">-</span>;
         try {
           const parsed = typeof log.details === 'string' ? JSON.parse(log.details) : log.details;
@@ -127,7 +126,7 @@ export function AuditLogs() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-dark-100">Admin Audit Logs</h1>
+        <h1 className="text-2xl font-bold text-dark-100">Audit Trail</h1>
         <span className="text-dark-500">{total} total entries</span>
       </div>
 
@@ -191,7 +190,7 @@ export function AuditLogs() {
           data={logs}
           keyExtractor={(log) => log.id}
           isLoading={isLoading}
-          emptyMessage="No audit logs found"
+          emptyMessage="No audit trail entries found"
         />
 
         {/* Pagination */}

@@ -1,0 +1,8 @@
+# Docker Compose override for e2e tests.
+# Passes E2E_ECHO_CREDENTIAL to agent-manager so the config generator
+# can bake the test credential into the Envoy Lua filter.
+
+services:
+  agent-manager:
+    environment:
+      - E2E_ECHO_CREDENTIAL=${E2E_ECHO_CREDENTIAL:-}

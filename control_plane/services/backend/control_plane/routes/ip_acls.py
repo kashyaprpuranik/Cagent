@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
-from control_plane.models import Tenant, TenantIpAcl, AuditLog
+from control_plane.models import Tenant, TenantIpAcl, AuditTrail
 from control_plane.schemas import TenantIpAclCreate, TenantIpAclUpdate, TenantIpAclResponse
 from control_plane.auth import TokenInfo, require_admin_role
 from control_plane.rate_limit import limiter
@@ -92,7 +92,7 @@ async def create_tenant_ip_acl(
     db.add(db_acl)
 
     # Audit log (use the tenant being modified)
-    log = AuditLog(
+    log = AuditTrail(
         event_type="ip_acl_created",
         user=token_info.token_name or "admin",
         action=f"IP ACL created for tenant {tenant_id}: {acl.cidr}",
@@ -135,7 +135,7 @@ async def update_tenant_ip_acl(
         db_acl.enabled = acl.enabled
 
     # Audit log (use the tenant being modified)
-    log = AuditLog(
+    log = AuditTrail(
         event_type="ip_acl_updated",
         user=token_info.token_name or "admin",
         action=f"IP ACL updated for tenant {tenant_id}: {db_acl.cidr}",
@@ -175,7 +175,7 @@ async def delete_tenant_ip_acl(
     db.delete(db_acl)
 
     # Audit log (use the tenant being modified)
-    log = AuditLog(
+    log = AuditTrail(
         event_type="ip_acl_deleted",
         user=token_info.token_name or "admin",
         action=f"IP ACL deleted for tenant {tenant_id}: {cidr}",

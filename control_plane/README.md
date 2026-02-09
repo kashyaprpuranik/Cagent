@@ -154,7 +154,7 @@ Domain policies combine allowlist, path filtering, rate limits, egress limits, a
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/audit-logs` | Query audit logs (tenant-filtered) |
+| GET | `/api/v1/audit-trail` | Query audit trail (tenant-filtered) |
 
 ### Agent Logs (Data Plane Operations)
 
@@ -233,7 +233,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8002/api/v1/domain-polic
 | Type | Role | Super Admin | Access |
 |------|------|-------------|--------|
 | `admin` | `admin` | Yes | **All access** - tenants, all endpoints, OpenObserve link |
-| `admin` | `admin` | No | **Tenant admin** - domain policies, agents, tokens, IP ACLs, audit-logs (tenant-scoped) |
+| `admin` | `admin` | No | **Tenant admin** - domain policies, agents, tokens, IP ACLs, audit trail (tenant-scoped) |
 | `admin` | `developer` | No | **Developer** - dashboard (read-only), agent logs, web terminal, settings |
 | `agent` | - | No | **Data plane** - heartbeat, domain-policies/for-domain (agent-scoped) |
 

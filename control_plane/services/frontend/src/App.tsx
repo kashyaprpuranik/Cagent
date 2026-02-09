@@ -3,7 +3,7 @@ import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
 import { DomainPolicies } from './pages/DomainPolicies';
 import { IpAcls } from './pages/IpAcls';
-import { AuditLogs } from './pages/AuditLogs';
+import { AuditTrail } from './pages/AuditLogs';
 import { AgentLogs } from './pages/AgentLogs';
 import { Tokens } from './pages/Tokens';
 import { Tenants } from './pages/Tenants';
@@ -47,7 +47,7 @@ function App() {
         <Route index element={<Dashboard />} />
         <Route path="domain-policies" element={<DomainPolicies />} />
         <Route path="ip-acls" element={<IpAcls />} />
-        <Route path="admin-logs" element={<AuditLogs />} />
+        <Route path="audit-trail" element={<AuditTrail />} />
         <Route path="agent-logs" element={<AgentLogs />} />
         <Route path="tokens" element={<Tokens />} />
         <Route path="tenants" element={<Tenants />} />
@@ -58,7 +58,8 @@ function App() {
       <Route path="/secrets" element={<Navigate to="/domain-policies" replace />} />
       <Route path="/allowlist" element={<Navigate to="/domain-policies" replace />} />
       <Route path="/rate-limits" element={<Navigate to="/domain-policies" replace />} />
-      <Route path="/audit-logs" element={<Navigate to="/admin-logs" replace />} />
+      <Route path="/audit-logs" element={<Navigate to="/audit-trail" replace />} />
+      <Route path="/admin-logs" element={<Navigate to="/audit-trail" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

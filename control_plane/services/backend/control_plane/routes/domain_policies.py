@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
-from control_plane.models import DomainPolicy, AuditLog
+from control_plane.models import DomainPolicy, AuditTrail
 from control_plane.schemas import (
     DomainPolicyCreate, DomainPolicyUpdate, DomainPolicyResponse, DomainPolicyCredential,
 )
@@ -160,7 +160,7 @@ async def create_domain_policy(
     db.add(db_policy)
 
     # Audit log
-    log = AuditLog(
+    log = AuditTrail(
         event_type="domain_policy_created",
         user=token_info.token_name or "admin",
         action=f"Domain policy created: {policy.domain}",
@@ -338,7 +338,7 @@ async def update_domain_policy(
         policy.credential_rotated_at = datetime.utcnow()
 
     # Audit log
-    log = AuditLog(
+    log = AuditTrail(
         event_type="domain_policy_updated",
         user=token_info.token_name or "admin",
         action=f"Domain policy updated: {policy.domain}",
@@ -374,7 +374,7 @@ async def delete_domain_policy(
     db.delete(policy)
 
     # Audit log
-    log = AuditLog(
+    log = AuditTrail(
         event_type="domain_policy_deleted",
         user=token_info.token_name or "admin",
         action=f"Domain policy deleted: {domain}",

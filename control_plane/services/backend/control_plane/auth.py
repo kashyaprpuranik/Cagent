@@ -1,5 +1,6 @@
-import json
 import ipaddress
+import threading
+import time as _time
 from datetime import datetime
 from typing import Optional, List
 
@@ -8,11 +9,41 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
-from control_plane.models import ApiToken, AgentState, TenantIpAcl, AuditLog
+from control_plane.models import ApiToken, AgentState, TenantIpAcl
 from control_plane.crypto import hash_token
 from slowapi.util import get_remote_address
 
 security = HTTPBearer(auto_error=False)
+
+# ---------------------------------------------------------------------------
+# Token verification cache
+# ---------------------------------------------------------------------------
+# Maps token_hash -> (TokenInfo, cached_at_monotonic, last_db_write_monotonic)
+# TTL: 60 s — avoids a DB round-trip on every request.
+# last_used_at is only flushed to the DB when the previous write was >10 min ago.
+#
+# TODO: Move to Redis so invalidation works across multiple API workers.
+# ---------------------------------------------------------------------------
+_TOKEN_CACHE_TTL = 60          # seconds
+_LAST_USED_WRITE_INTERVAL = 600  # 10 minutes
+
+_token_cache: dict = {}        # token_hash -> (TokenInfo, float, float)
+_token_cache_lock = threading.Lock()
+
+
+def invalidate_token_cache(token_hash: str) -> None:
+    """Remove a token from the verification cache.
+
+    Call this when a token is deleted, disabled, or modified.
+    """
+    with _token_cache_lock:
+        _token_cache.pop(token_hash, None)
+
+
+def clear_token_cache() -> None:
+    """Remove all entries — useful in tests."""
+    with _token_cache_lock:
+        _token_cache.clear()
 
 
 class TokenInfo:
@@ -46,17 +77,38 @@ async def verify_token(
 ) -> TokenInfo:
     """Verify token and return token info with type and permissions.
 
-    Tokens are looked up by SHA-256 hash in the database.
+    Uses an in-memory cache (60 s TTL) to avoid a DB round-trip on every
+    request.  ``last_used_at`` is only flushed to the DB when the previous
+    write was more than 10 minutes ago.
     """
     if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     token = credentials.credentials
-    token_hash = hash_token(token)
+    token_hash_value = hash_token(token)
+    now = _time.monotonic()
 
-    # Look up token in database
+    # --- cache lookup ---
+    with _token_cache_lock:
+        cached = _token_cache.get(token_hash_value)
+    if cached is not None:
+        info, cached_at, last_write = cached
+        if now - cached_at < _TOKEN_CACHE_TTL:
+            # Lazily update last_used_at if stale
+            if now - last_write >= _LAST_USED_WRITE_INTERVAL:
+                db.execute(
+                    ApiToken.__table__.update()
+                    .where(ApiToken.token_hash == token_hash_value)
+                    .values(last_used_at=datetime.utcnow())
+                )
+                db.commit()
+                with _token_cache_lock:
+                    _token_cache[token_hash_value] = (info, cached_at, now)
+            return info
+
+    # --- cache miss: full DB lookup ---
     db_token = db.query(ApiToken).filter(
-        ApiToken.token_hash == token_hash,
+        ApiToken.token_hash == token_hash_value,
         ApiToken.enabled == True
     ).first()
 
@@ -79,7 +131,7 @@ async def verify_token(
         # Parse roles (comma-separated string to list)
         roles = (db_token.roles or "admin").split(",")
 
-        return TokenInfo(
+        info = TokenInfo(
             token_type=db_token.token_type,
             agent_id=db_token.agent_id,
             token_name=db_token.name,
@@ -88,6 +140,12 @@ async def verify_token(
             roles=roles,
             api_token_id=db_token.id,
         )
+
+        # Populate cache
+        with _token_cache_lock:
+            _token_cache[token_hash_value] = (info, now, now)
+
+        return info
 
     raise HTTPException(status_code=403, detail="Invalid token")
 
@@ -219,21 +277,9 @@ async def verify_ip_acl(
         if validate_ip_in_cidr(client_ip, acl.cidr):
             return token_info
 
-    # IP not in any allowed range - deny and log
-    log = AuditLog(
-        event_type="ip_acl_denied",
-        user=token_info.token_name,
-        action=f"Access denied: IP {client_ip} not in tenant's allowed ranges",
-        details=json.dumps({
-            "client_ip": client_ip,
-            "tenant_id": token_info.tenant_id,
-            "allowed_cidrs": [acl.cidr for acl in ip_acls]
-        }),
-        severity="WARNING",
-        tenant_id=token_info.tenant_id  # Must have tenant_id since IP ACL check only applies to tenant admins
-    )
-    db.add(log)
-    db.commit()
+    # IP not in any allowed range — deny.
+    # TODO: Log IP ACL denials to a proper audit log (append-only / external),
+    # not the transactional audit trail table.
 
     raise HTTPException(
         status_code=403,

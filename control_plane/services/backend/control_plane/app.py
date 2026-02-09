@@ -8,7 +8,7 @@ from control_plane.rate_limit import limiter
 from control_plane.config import CORS_ORIGINS
 from control_plane.database import Base, engine
 from control_plane.models import (  # noqa: F401 - ensure models are registered
-    Tenant, TenantIpAcl, AuditLog, DomainPolicy,
+    Tenant, TenantIpAcl, AuditTrail, DomainPolicy,
     AgentState, TerminalSession, ApiToken, WebSocketTicket,
 )
 from control_plane.routes import health, logs, domain_policies, agents, terminal, tenants, ip_acls, tokens

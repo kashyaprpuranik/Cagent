@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 
 from control_plane.config import OPENOBSERVE_URL, OPENOBSERVE_USER, OPENOBSERVE_PASSWORD
 from control_plane.database import get_db
-from control_plane.models import AgentState, AuditLog
-from control_plane.schemas import LogBatch, AuditLogResponse
+from control_plane.models import AgentState, AuditTrail
+from control_plane.schemas import LogBatch, AuditTrailResponse
 from control_plane.auth import TokenInfo, verify_token, require_admin_role, require_developer_role
 from control_plane.rate_limit import limiter
 from control_plane.config import logger
@@ -237,9 +237,9 @@ async def query_agent_logs(
 # Audit Log Endpoints
 # =============================================================================
 
-@router.get("/api/v1/audit-logs")
+@router.get("/api/v1/audit-trail")
 @limiter.limit("60/minute")
-async def get_audit_logs(
+async def get_audit_trail(
     request: Request,
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin_role),
@@ -254,52 +254,52 @@ async def get_audit_logs(
     limit: int = Query(default=100, le=1000),
     offset: int = 0
 ):
-    """Search and retrieve audit logs (admin only).
+    """Search and retrieve audit trail entries (admin only).
 
     Super admins can filter by tenant_id, or see all logs if not specified.
     Tenant admins see only their tenant's logs.
     """
-    query = db.query(AuditLog)
+    query = db.query(AuditTrail)
 
     # Apply tenant filtering
     if token_info.is_super_admin:
         # Super admin can optionally filter by tenant
         if tenant_id is not None:
-            query = query.filter(AuditLog.tenant_id == tenant_id)
+            query = query.filter(AuditTrail.tenant_id == tenant_id)
         # else: no filter, see all logs
     else:
         # Non-super-admin MUST be scoped to their tenant
         if not token_info.tenant_id:
             raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
-        query = query.filter(AuditLog.tenant_id == token_info.tenant_id)
+        query = query.filter(AuditTrail.tenant_id == token_info.tenant_id)
 
     if event_type:
-        query = query.filter(AuditLog.event_type == event_type)
+        query = query.filter(AuditTrail.event_type == event_type)
     if user:
-        query = query.filter(AuditLog.user.contains(user))
+        query = query.filter(AuditTrail.user.contains(user))
     if severity:
-        query = query.filter(AuditLog.severity == severity.upper())
+        query = query.filter(AuditTrail.severity == severity.upper())
     if container_id:
-        query = query.filter(AuditLog.container_id == container_id)
+        query = query.filter(AuditTrail.container_id == container_id)
     if start_time:
         try:
             parsed = datetime.fromisoformat(start_time)
-            query = query.filter(AuditLog.timestamp >= parsed)
+            query = query.filter(AuditTrail.timestamp >= parsed)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid start_time format: {start_time}")
     if end_time:
         try:
             parsed = datetime.fromisoformat(end_time)
-            query = query.filter(AuditLog.timestamp <= parsed)
+            query = query.filter(AuditTrail.timestamp <= parsed)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid end_time format: {end_time}")
     if search:
         query = query.filter(
-            AuditLog.event_type.contains(search) |
-            AuditLog.action.contains(search) |
-            AuditLog.details.contains(search)
+            AuditTrail.event_type.contains(search) |
+            AuditTrail.action.contains(search) |
+            AuditTrail.details.contains(search)
         )
 
     total = query.count()
-    items = query.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limit).all()
+    items = query.order_by(AuditTrail.timestamp.desc()).offset(offset).limit(limit).all()
     return {"items": items, "total": total}

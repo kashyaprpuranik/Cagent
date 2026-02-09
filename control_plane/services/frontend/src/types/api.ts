@@ -12,7 +12,7 @@ export interface DataPlane {
   last_heartbeat?: string;
 }
 
-export interface AuditLog {
+export interface AuditTrailEntry {
   id: number;
   timestamp: string;
   event_type: string;
@@ -23,7 +23,7 @@ export interface AuditLog {
   details?: string;
 }
 
-export interface AuditLogFilters {
+export interface AuditTrailFilters {
   tenant_id?: number;
   event_type?: string;
   search?: string;

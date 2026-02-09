@@ -41,7 +41,7 @@ def get_audit_tenant_id(token_info: TokenInfo, db: Session, agent_state: AgentSt
     """Get the target tenant ID for audit logging.
 
     This is the tenant whose data was affected, NOT the authorizer.
-    The authorizer is captured in the AuditLog.user field.
+    The authorizer is captured in the AuditTrail.user field.
 
     Priority:
     1. If agent_state is provided, use its tenant_id (action targeted an agent)

@@ -198,15 +198,26 @@ with engine.connect() as conn:
         conn.execute(text('ALTER TABLE agent_state ALTER COLUMN tenant_id SET NOT NULL'))
         conn.commit()
 
-    # Add tenant_id column to audit_logs if missing
+    # Rename audit_logs -> audit_trail (table was renamed)
+    result = conn.execute(text(\"\"\"
+        SELECT table_name FROM information_schema.tables
+        WHERE table_name = 'audit_logs'
+    \"\"\"))
+    if result.fetchone():
+        print('Renaming audit_logs table to audit_trail...')
+        conn.execute(text('ALTER TABLE audit_logs RENAME TO audit_trail'))
+        conn.execute(text('ALTER INDEX IF EXISTS ix_audit_logs_tenant_id RENAME TO ix_audit_trail_tenant_id'))
+        conn.commit()
+
+    # Add tenant_id column to audit_trail if missing
     result = conn.execute(text(\"\"\"
         SELECT column_name FROM information_schema.columns
-        WHERE table_name = 'audit_logs' AND column_name = 'tenant_id'
+        WHERE table_name = 'audit_trail' AND column_name = 'tenant_id'
     \"\"\"))
     if not result.fetchone():
-        print('Adding tenant_id column to audit_logs...')
-        conn.execute(text('ALTER TABLE audit_logs ADD COLUMN tenant_id INTEGER NOT NULL REFERENCES tenants(id)'))
-        conn.execute(text('CREATE INDEX ix_audit_logs_tenant_id ON audit_logs(tenant_id)'))
+        print('Adding tenant_id column to audit_trail...')
+        conn.execute(text('ALTER TABLE audit_trail ADD COLUMN tenant_id INTEGER NOT NULL REFERENCES tenants(id)'))
+        conn.execute(text('CREATE INDEX ix_audit_trail_tenant_id ON audit_trail(tenant_id)'))
         conn.commit()
 
     # Fix seed tokens - ensure correct is_super_admin and tenant_id

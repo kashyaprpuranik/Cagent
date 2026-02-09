@@ -5,10 +5,10 @@ from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
-from control_plane.models import AgentState, ApiToken, AuditLog
+from control_plane.models import AgentState, ApiToken, AuditTrail
 from control_plane.schemas import ApiTokenCreate, ApiTokenResponse, ApiTokenCreatedResponse
 from control_plane.crypto import generate_token, hash_token
-from control_plane.auth import TokenInfo, require_admin_role, require_admin_role_with_ip_check
+from control_plane.auth import TokenInfo, require_admin_role, require_admin_role_with_ip_check, invalidate_token_cache
 from control_plane.rate_limit import limiter
 
 router = APIRouter()
@@ -152,7 +152,7 @@ async def create_token(
     db.add(db_token)
 
     # Log token creation — target is the tenant the token belongs to
-    log = AuditLog(
+    log = AuditTrail(
         event_type="token_created",
         user=token_info.token_name or "admin",
         action=f"Token '{body.name}' created (type={body.token_type}, roles={roles_str}, super_admin={body.is_super_admin})",
@@ -195,9 +195,10 @@ async def delete_token(
 
     token_name = db_token.name
     deleted_token_tenant_id = db_token.tenant_id
+    invalidate_token_cache(db_token.token_hash)
 
     # Log token deletion — target is the tenant the token belonged to
-    log = AuditLog(
+    log = AuditTrail(
         event_type="token_deleted",
         user=token_info.token_name or "admin",
         action=f"Token '{token_name}' deleted",
@@ -231,10 +232,11 @@ async def update_token(
 
     if enabled is not None:
         db_token.enabled = enabled
+        invalidate_token_cache(db_token.token_hash)
 
         # Log the change — target is the tenant the token belongs to
         action = "enabled" if enabled else "disabled"
-        log = AuditLog(
+        log = AuditTrail(
             event_type=f"token_{action}",
             user=token_info.token_name or "admin",
             action=f"Token '{db_token.name}' {action}",

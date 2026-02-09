@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
-from control_plane.models import Tenant, AgentState, ApiToken, AuditLog
+from control_plane.models import Tenant, AgentState, ApiToken, AuditTrail
 from control_plane.schemas import TenantCreate, TenantResponse
 from control_plane.auth import TokenInfo, require_super_admin
 from control_plane.rate_limit import limiter
@@ -83,7 +83,7 @@ async def create_tenant(
     db.add(default_agent)
 
     # Log tenant creation — target is the newly created tenant
-    log = AuditLog(
+    log = AuditTrail(
         event_type="tenant_created",
         user=token_info.token_name,
         action=f"Created tenant '{body.name}' (slug: {body.slug})",
@@ -170,7 +170,7 @@ async def delete_tenant(
     tenant.deleted_at = now
 
     # Log deletion — target is the tenant being deleted
-    log = AuditLog(
+    log = AuditTrail(
         event_type="tenant_deleted",
         user=token_info.token_name,
         action=f"Soft-deleted tenant '{tenant.name}' and {agent_count} agents",

@@ -9,7 +9,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
-from control_plane.models import AgentState, AuditLog
+from control_plane.models import AgentState, AuditTrail
 from control_plane.schemas import (
     DataPlaneResponse, AgentHeartbeat, AgentHeartbeatResponse,
     AgentStatusResponse, AgentCommandRequest, STCPSecretResponse, STCPVisitorConfig,
@@ -149,7 +149,7 @@ async def agent_heartbeat(
         state.last_command_at = datetime.utcnow()
 
         # Log command completion
-        log = AuditLog(
+        log = AuditTrail(
             event_type=f"agent_{heartbeat.last_command}",
             user="agent-manager",
             action=f"Agent {heartbeat.last_command}: {heartbeat.last_command_result}",
@@ -216,7 +216,7 @@ async def queue_agent_wipe(
         )
 
     # Log the wipe request
-    log = AuditLog(
+    log = AuditTrail(
         event_type="agent_wipe_requested",
         user=token_info.token_name or "admin",
         action=f"Wipe requested for {agent_id} (workspace={'wipe' if body.wipe_workspace else 'preserve'})",
@@ -425,7 +425,7 @@ async def generate_stcp_secret(
     db.commit()
 
     # Log the action
-    log = AuditLog(
+    log = AuditTrail(
         event_type="stcp_secret_generated",
         user=token_info.token_name or "admin",
         action=f"STCP secret generated for agent {agent_id}",
@@ -476,7 +476,7 @@ async def generate_stcp_secret_from_token(
     db.commit()
 
     # Log the action
-    log = AuditLog(
+    log = AuditTrail(
         event_type="stcp_secret_generated",
         user=token_info.token_name or "agent",
         action=f"STCP secret generated for agent {agent_id}",

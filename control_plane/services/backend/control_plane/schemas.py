@@ -4,7 +4,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 
 
-class AuditLogResponse(BaseModel):
+class AuditTrailResponse(BaseModel):
     id: int
     timestamp: datetime
     event_type: str

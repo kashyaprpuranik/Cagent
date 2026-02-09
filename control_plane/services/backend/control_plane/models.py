@@ -44,8 +44,8 @@ class TenantIpAcl(Base):
     )
 
 
-class AuditLog(Base):
-    __tablename__ = "audit_logs"
+class AuditTrail(Base):
+    __tablename__ = "audit_trail"
 
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)

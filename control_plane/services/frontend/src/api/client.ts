@@ -1,8 +1,8 @@
 import type {
   HealthStatus,
   DataPlane,
-  AuditLog,
-  AuditLogFilters,
+  AuditTrailEntry,
+  AuditTrailFilters,
   PaginatedResponse,
   AgentStatus,
   AgentCommandResponse,
@@ -114,20 +114,20 @@ export const api = {
     return handleResponse<DataPlane[]>(response);
   },
 
-  // Audit Logs (Admin/CP logs from Postgres)
-  getAuditLogs: async (
-    params: AuditLogFilters = {}
-  ): Promise<PaginatedResponse<AuditLog>> => {
+  // Audit Trail (transactional entries from Postgres)
+  getAuditTrail: async (
+    params: AuditTrailFilters = {}
+  ): Promise<PaginatedResponse<AuditTrailEntry>> => {
     const searchParams = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined && value !== '') {
         searchParams.append(key, String(value));
       }
     });
-    const response = await fetch(`${API_BASE}/audit-logs?${searchParams}`, {
+    const response = await fetch(`${API_BASE}/audit-trail?${searchParams}`, {
       headers: getAuthHeaders(),
     });
-    return handleResponse<PaginatedResponse<AuditLog>>(response);
+    return handleResponse<PaginatedResponse<AuditTrailEntry>>(response);
   },
 
   // Agent Logs (DP logs from OpenObserve)

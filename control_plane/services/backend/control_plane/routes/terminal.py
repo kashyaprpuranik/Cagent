@@ -9,7 +9,7 @@ from starlette.websockets import WebSocketState
 from sqlalchemy.orm import Session
 
 from control_plane.database import SessionLocal, get_db
-from control_plane.models import AgentState, AuditLog, TerminalSession, WebSocketTicket
+from control_plane.models import AgentState, AuditTrail, TerminalSession, WebSocketTicket
 from control_plane.schemas import TerminalSessionResponse, TerminalTicketResponse
 from control_plane.crypto import generate_token, hash_token
 from control_plane.auth import TokenInfo, require_admin_role, require_developer_role
@@ -178,7 +178,7 @@ async def terminal_websocket(
 
         # Audit log — target is the agent's tenant
         audit_tenant_id = tenant_id
-        log = AuditLog(
+        log = AuditTrail(
             event_type="terminal_session_start",
             user=token_name,
             container_id=agent_id,
@@ -252,7 +252,7 @@ async def terminal_websocket(
                 session.bytes_received = bytes_received if 'bytes_received' in locals() else 0
 
             # Audit log
-            log = AuditLog(
+            log = AuditTrail(
                 event_type="terminal_session_end",
                 user=token_name if 'token_name' in locals() else "unknown",
                 container_id=agent_id,

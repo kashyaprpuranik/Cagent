@@ -34,7 +34,7 @@ const navSections: NavSection[] = [
     title: 'Observability',
     items: [
       { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-      { to: '/admin-logs', icon: FileText, label: 'Admin Logs', adminOnly: true },
+      { to: '/audit-trail', icon: FileText, label: 'Audit Trail', adminOnly: true },
       { to: '/agent-logs', icon: ScrollText, label: 'Agent Logs' },
     ],
   },

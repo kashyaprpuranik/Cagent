@@ -1,22 +1,22 @@
-"""Tests for audit log and log ingestion endpoints."""
+"""Tests for audit trail and log ingestion endpoints."""
 
 
-class TestAuditLogs:
-    """Test audit log endpoints."""
+class TestAuditTrail:
+    """Test audit trail endpoints."""
 
-    def test_get_audit_logs(self, client, auth_headers):
-        """Should retrieve audit logs."""
-        response = client.get("/api/v1/audit-logs", headers=auth_headers)
+    def test_get_audit_trail(self, client, auth_headers):
+        """Should retrieve audit trail entries."""
+        response = client.get("/api/v1/audit-trail", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert "items" in data
         assert "total" in data
         assert isinstance(data["items"], list)
 
-    def test_audit_logs_pagination(self, client, auth_headers):
+    def test_audit_trail_pagination(self, client, auth_headers):
         """Should support limit and offset."""
         response = client.get(
-            "/api/v1/audit-logs?limit=10&offset=0",
+            "/api/v1/audit-trail?limit=10&offset=0",
             headers=auth_headers
         )
         assert response.status_code == 200
@@ -49,10 +49,10 @@ class TestLogEndpoints:
         assert response.status_code == 403
         assert "agent tokens" in response.json()["detail"].lower()
 
-    def test_audit_logs_filtering(self, client, auth_headers):
-        """Should support audit log filtering by event type."""
+    def test_audit_trail_filtering(self, client, auth_headers):
+        """Should support audit trail filtering by event type."""
         response = client.get(
-            "/api/v1/audit-logs?event_type=stcp_secret_generated",
+            "/api/v1/audit-trail?event_type=stcp_secret_generated",
             headers=auth_headers,
         )
         assert response.status_code == 200
@@ -60,10 +60,10 @@ class TestLogEndpoints:
         assert "items" in data
         assert "total" in data
 
-    def test_audit_logs_search(self, client, auth_headers):
-        """Should support text search in audit logs."""
+    def test_audit_trail_search(self, client, auth_headers):
+        """Should support text search in audit trail."""
         response = client.get(
-            "/api/v1/audit-logs?search=agent",
+            "/api/v1/audit-trail?search=agent",
             headers=auth_headers,
         )
         assert response.status_code == 200

@@ -122,38 +122,49 @@ Default PostgreSQL credentials (`aidevbox/aidevbox`), OpenObserve defaults, and 
 
 ---
 
-## 3. Observability Gaps
+## 3. Product Observability Gaps
 
-### What Exists (Good)
+This section covers what Cagent shows its users (tenant admins, agent developers) about agent behavior — not infrastructure monitoring of Cagent itself.
 
-| Layer | Tool | Coverage |
-|-------|------|----------|
-| HTTP requests | Envoy access logs (JSON) | All egress traffic |
-| DNS queries | CoreDNS query logs | All resolution attempts |
-| Kernel syscalls | gVisor audit (when enabled) | Blocked syscalls |
-| API audit trail | PostgreSQL `audit_trail` table | Token/policy/terminal events |
-| Centralized logs | OpenObserve + Vector shipper | Aggregated, multi-tenant |
-| Log hardening | Batch size, payload, age limits | Ingestion abuse prevention |
+### What Users Can See Today
 
-### What Is Missing
+| Capability | Where | Quality |
+|-----------|-------|---------|
+| Which domains the agent accessed | Logs & Traffic dashboard (top domains widget) | Good, but computed from live logs only — no historical aggregation |
+| Request success/failure counts | Traffic stats (2xx/3xx/4xx/5xx counters) | Basic counts, no time-series |
+| Average latency | Traffic stats dashboard | Average only — no p50/p95/p99 percentiles |
+| Blocked requests (403) | "Blocked" counter + searchable in logs | Visible, but no explanation of *why* it was blocked |
+| Rate-limited requests (429) | "Rate Limited" counter + searchable in logs | Visible after the fact |
+| DNS resolution attempts | CoreDNS logs (source=coredns) | Raw log lines, not surfaced prominently |
+| Agent status (online, CPU, memory) | Dashboard page, heartbeat API | Good real-time view |
+| Administrative actions | Audit trail page | Comprehensive for compliance |
 
-1. **No application metrics (Prometheus/StatsD).** There are no counters for:
-   - Token validations (success/failure/expired)
-   - Domain policy lookups (hit/miss/denied)
-   - Rate limit triggers (per domain, per tenant)
-   - Agent heartbeat latency and staleness
-   - Config sync failures
-   - WebSocket connection counts
+### What Users Cannot See
 
-   Without these, operators cannot build dashboards or set alerts for anomalous behavior.
+1. **No rate limit consumption gauge.** Domain policies define `requests_per_minute` and `burst_size`, but there is no indicator showing "you're at 80% of your limit for api.openai.com." Users discover they've hit a rate limit only when requests start returning 429. A real-time consumption bar per domain would let developers self-regulate before they're blocked.
 
-2. **No distributed tracing (OpenTelemetry).** A request from agent → Envoy → external API → response involves multiple services. There is no trace ID propagation. Debugging latency or failure requires correlating logs manually across containers.
+2. **No credential usage tracking.** Envoy logs include a `credential_injected` flag per request, but there is no aggregated view showing "your GitHub API key was used 200 times today." For a security product, this is a significant gap — operators cannot detect credential abuse or unexpected usage patterns without parsing raw logs.
 
-3. **No health check beyond `/health`.** The health endpoint checks database connectivity but does not verify Redis, OpenObserve, or upstream proxy reachability. A partial outage (e.g., Redis down, causing rate limiting to fail open) would not be detected.
+3. **No "why was this blocked?" explanation.** When a request fails, the agent sees a status code (403, 429, NXDOMAIN) but no structured reason. A developer debugging a failing agent cannot easily distinguish:
+   - Domain not in allowlist (DNS-level block)
+   - Domain allowed but path not in `allowed_paths` (proxy-level block)
+   - Rate limit exceeded (temporary block)
+   - Credential injection failed (config issue)
+   - Upstream returned an error (external issue)
 
-4. **No alerting integration.** There is no webhook, PagerDuty, or Slack notification for critical events like: mass rate limiting, agent going offline, config sync failures, or audit trail anomalies.
+   A deny-reason header or structured error response from the proxy would collapse hours of log-digging into a single glance.
 
-5. **Log query lacks tenant-scoped dashboards.** The OpenObserve integration provides per-tenant log isolation, but there are no pre-built dashboards or saved queries. Each tenant administrator must build their own views from scratch.
+4. **No agent activity timeline.** There is no waterfall or sequence view showing "the agent made these requests in this order during this task." Logs are a flat, searchable list. Reconstructing what an agent did requires manually filtering by agent_id, setting a time range, and reading timestamps sequentially. A session-oriented timeline would be the most natural view for developers debugging agent behavior.
+
+5. **No alerting or notifications.** There are no webhooks, email alerts, or in-app notifications for notable events. A tenant admin has no way to be notified when:
+   - An agent attempts to access a blocked domain (potential misconfiguration or agent misbehavior)
+   - Rate limits are being hit repeatedly (agent in a retry loop)
+   - An agent goes offline unexpectedly
+   - Credential usage spikes anomalously
+
+6. **No historical trends.** Traffic stats are computed in-memory from recent logs. There is no persistent time-series showing "requests to api.openai.com over the last 7 days." Without trends, users cannot answer basic capacity questions like "is my agent making more API calls this week than last week?" or spot gradual behavioral drift.
+
+7. **No egress bandwidth tracking.** The `DomainPolicy` schema has a `bytes_per_hour` field, but it is not enforced in the proxy and not visible in any UI. Users have no view of data volume per domain.
 
 ---
 
@@ -192,16 +203,17 @@ Default PostgreSQL credentials (`aidevbox/aidevbox`), OpenObserve defaults, and 
 | P1 | Replace in-memory token cache with Redis | Required for multi-worker deployments |
 | P1 | Add mTLS between data plane and control plane | Currently relies on bearer tokens over HTTPS |
 
-### Phase 2: Observability & Operations
+### Phase 2: Product Observability
 
 | Priority | Item | Rationale |
 |----------|------|-----------|
-| P1 | Add Prometheus metrics endpoint | Enable dashboards and alerting |
-| P1 | Implement OpenTelemetry tracing | Enable cross-service request debugging |
-| P2 | Rich health checks (Redis, OpenObserve, upstream proxy) | Detect partial outages |
-| P2 | Alerting integration (webhook, Slack, PagerDuty) | Proactive incident response |
-| P2 | Pre-built OpenObserve dashboards per tenant | Reduce time-to-value for tenant admins |
-| P2 | Agent-side diagnostic CLI (`cagent status`, `cagent test-connection`) | Help agents self-diagnose connectivity |
+| P1 | Deny-reason header on blocked requests | Developers can instantly see *why* a request failed (DNS block, path restriction, rate limit, upstream error) |
+| P1 | Rate limit consumption gauge per domain | Show "X of Y requests used this minute" so developers self-regulate before hitting 429 |
+| P1 | Credential usage counters per domain policy | Surface "this credential was used N times today" — essential for security visibility |
+| P2 | Agent activity timeline / session view | Show a chronological waterfall of requests per agent run, not just a flat log list |
+| P2 | Historical traffic trends (per-domain time-series) | Answer "is usage going up or down?" — requires persisting aggregated stats beyond in-memory |
+| P2 | Webhook/alerting for notable events | Notify admins when: blocked domain access, rate limit saturation, agent offline, credential usage spike |
+| P3 | Enforce and surface `bytes_per_hour` egress quotas | The schema already supports it; wire it through the proxy and expose in the UI |
 
 ### Phase 3: Usability & Developer Experience
 

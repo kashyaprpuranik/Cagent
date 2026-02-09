@@ -170,97 +170,73 @@ This section covers what Cagent shows its users (tenant admins, agent developers
 
 ## 4. Usability Friction Points
 
-### Setup Complexity
+### Onboarding
 
 - **First-run experience requires 5+ manual steps.** Generate encryption key, copy `.env.example`, run `dev_up.sh`, wait for health checks, then manually create domain policies. The `dev_up.sh` script handles much of this, but there is no guided setup for production.
 - **No `cagent init` CLI.** Users must manually edit YAML and docker-compose files. A CLI wizard that generates `cagent.yaml` from interactive prompts (or a web-based setup wizard) would significantly reduce onboarding friction.
 - **Agent variant selection is opaque.** `AGENT_VARIANT=lean|dev|ml` controls the base image but there is no documentation of what tools each variant includes or how to customize them.
 
-### Configuration Management
+### Day-to-Day Configuration
 
-- **No configuration validation.** The `cagent.yaml` file is parsed with `yaml.safe_load()` but there is no schema validation. A typo in a domain name, missing required field, or wrong type silently produces broken CoreDNS/Envoy configs. A JSON Schema or Pydantic model for `cagent.yaml` would catch errors before they cause runtime failures.
-- **Config changes require container restarts.** When `cagent.yaml` changes, the agent manager regenerates CoreDNS and Envoy configs, but the services must be reloaded. There is no hot-reload signal sent to CoreDNS or Envoy.
-- **No diff preview for policy changes.** When the control plane pushes new domain policies, the data plane applies them immediately. There is no dry-run or diff preview showing what will change before it takes effect.
+- **No configuration validation.** `cagent.yaml` is parsed with `yaml.safe_load()` but there is no schema validation. A typo in a domain name, missing required field, or wrong type silently produces broken CoreDNS/Envoy configs that fail at runtime. Users get no feedback at save-time — they discover the breakage minutes later when the agent can't reach anything.
+- **Config changes require container restarts.** When `cagent.yaml` changes, the agent manager regenerates CoreDNS and Envoy configs, but the services need to restart to pick them up. For a developer iterating on allowlist policies, this adds a ~10-second wait-and-check cycle every time.
+- **No diff preview for policy changes.** When the control plane pushes new domain policies, the data plane applies them immediately. There is no "here's what will change" preview. An accidental removal of a critical domain from the allowlist takes effect instantly with no confirmation.
 
-### Developer Experience
+### Agent Developer Experience
 
-- **No SDK or CLI for agent developers.** An agent running inside Cagent has no way to introspect its own permissions. An SDK or CLI that answers "can I reach api.github.com?" or "what rate limit applies to me?" would improve the agent development loop.
-- **Email proxy is beta with no documentation.** The email proxy supports Gmail, Outlook, and generic IMAP/SMTP, but there is no user-facing documentation on how to configure OAuth credentials, set up recipient allowlists, or test email delivery.
+- **No way for agents to introspect their own permissions.** An agent running inside Cagent has no API or CLI to ask "can I reach api.github.com?" or "what rate limit applies to me?" Developers discover permission gaps at runtime when requests fail, then context-switch to the admin UI to diagnose.
+- **Email proxy is undiscoverable.** The email proxy supports Gmail, Outlook, and generic IMAP/SMTP, but there is no user-facing documentation on how to configure OAuth credentials, set up recipient allowlists, or verify email delivery is working.
 
 ---
 
 ## 5. Suggested Product Roadmap
 
-### Phase 1: Foundation Hardening (Security & Reliability)
+### Phase 1: Security Fixes
 
 | Priority | Item | Rationale |
 |----------|------|-----------|
 | P0 | Bind Envoy admin to 127.0.0.1 | Prevents agent from manipulating proxy |
 | P0 | Sanitize WebSocket close reasons | Prevents internal state leakage |
-| P0 | Add CI/CD pipeline (GitHub Actions) | Automate tests, linting, dependency scanning, container scanning |
 | P1 | Harden log query SQL construction (`match_all()` + enum validation) | Reduces intra-tenant injection surface |
-| P1 | Add JSON Schema validation for `cagent.yaml` | Catch config errors before they cause runtime failures |
-| P1 | Replace in-memory token cache with Redis | Required for multi-worker deployments |
-| P1 | Add mTLS between data plane and control plane | Currently relies on bearer tokens over HTTPS |
 
 ### Phase 2: Product Observability
 
 | Priority | Item | Rationale |
 |----------|------|-----------|
-| P1 | Deny-reason header on blocked requests | Developers can instantly see *why* a request failed (DNS block, path restriction, rate limit, upstream error) |
+| P1 | Deny-reason header on blocked requests | Developers can instantly see *why* a request failed (DNS block, path restriction, rate limit, upstream error) instead of guessing from status codes |
 | P1 | Rate limit consumption gauge per domain | Show "X of Y requests used this minute" so developers self-regulate before hitting 429 |
-| P1 | Credential usage counters per domain policy | Surface "this credential was used N times today" — essential for security visibility |
+| P1 | Credential usage counters per domain policy | Surface "this credential was used N times today" — essential for detecting misuse |
 | P2 | Agent activity timeline / session view | Show a chronological waterfall of requests per agent run, not just a flat log list |
 | P2 | Historical traffic trends (per-domain time-series) | Answer "is usage going up or down?" — requires persisting aggregated stats beyond in-memory |
 | P2 | Webhook/alerting for notable events | Notify admins when: blocked domain access, rate limit saturation, agent offline, credential usage spike |
 | P3 | Enforce and surface `bytes_per_hour` egress quotas | The schema already supports it; wire it through the proxy and expose in the UI |
 
-### Phase 3: Usability & Developer Experience
+### Phase 3: Usability
 
 | Priority | Item | Rationale |
 |----------|------|-----------|
-| P2 | `cagent init` CLI wizard | Guided setup for new installations |
-| P2 | Policy diff preview (dry-run mode) | Prevent accidental lockouts from policy changes |
-| P2 | Agent introspection SDK | Let agents query their own permissions programmatically |
-| P2 | Hot-reload for CoreDNS/Envoy configs | Avoid service restarts on policy changes |
-| P3 | Frontend test suite (Vitest) | Both React apps have zero test coverage |
+| P1 | Config validation with clear error messages | Users currently get silent breakage from typos in `cagent.yaml`; a schema check at save-time would catch this |
+| P2 | `cagent init` CLI wizard | Guided setup instead of manual YAML editing |
+| P2 | Policy diff preview (dry-run mode) | "Here's what will change" before applying — prevents accidental lockouts |
+| P2 | Agent introspection SDK / CLI | Let agents ask "can I reach X?" and "what rate limit applies?" without leaving the sandbox |
+| P2 | Hot-reload for CoreDNS/Envoy configs | Eliminate the restart-and-wait cycle when iterating on policies |
 | P3 | Email proxy documentation and setup wizard | The feature exists but is undiscoverable |
-| P3 | Agent variant documentation and customization guide | Clarify lean/dev/ml differences |
+| P3 | Agent variant documentation | Clarify what lean/dev/ml include and how to customize |
 
 ### Phase 4: Scale & Enterprise
 
 | Priority | Item | Rationale |
 |----------|------|-----------|
-| P3 | Encryption key rotation mechanism | Currently a single static Fernet key with no rotation |
+| P3 | Encryption key rotation mechanism | Currently a single static Fernet key with no rotation path |
 | P3 | Vault/AWS Secrets Manager integration | Enterprise secret management |
-| P3 | Egress bandwidth quotas (per-domain `bytes_per_hour`) | The schema supports it but it is not enforced in the proxy |
-| P3 | Webhook notifications for agent events | Enable integration with external systems |
-| P3 | Policy-as-code (GitOps) | Version-controlled domain policies with PR-based approval |
+| P3 | Policy-as-code (GitOps) | Version-controlled domain policies with PR-based approval workflows |
 | P4 | Kubernetes operator | Deploy data planes as K8s pods with CRDs for policies |
 | P4 | SSO/OIDC integration for the admin console | Enterprise identity management |
 
 ---
 
-## 6. Code Quality Observations
-
-### Positive Patterns
-
-- **Consistent use of FastAPI dependency injection** for auth, database, and rate limiting.
-- **Pydantic models for request/response validation** in the control plane API.
-- **Soft deletes with `deleted_at`** — good for audit compliance and data recovery.
-- **Lazy `last_used_at` writes** (10-minute flush interval) — avoids write amplification on every request.
-- **Log ingestion hardening** — batch size, payload size, age limits, and trusted identity injection prevent log poisoning.
-
-### Areas for Improvement
-
-- **Inconsistent datetime handling.** Some code uses `datetime.utcnow()` (naive), other code uses `datetime.now(timezone.utc)` (aware). This can cause comparison bugs. Standardize on timezone-aware datetimes throughout.
-- **`'started_at' in locals()` pattern** in `terminal.py:242`. This is fragile. Use a sentinel value or restructure the try/finally to avoid checking locals().
-- **No type hints on several data plane modules.** The control plane backend has good type annotations; the agent manager and email proxy are less consistent.
-- **Test coverage is uneven.** Domain policies have 536 lines of tests; auth has 23 lines. Terminal WebSocket testing is minimal (57 lines) for a security-sensitive feature.
-- **No integration test for the full proxy chain.** The E2E tests verify network isolation, but there is no test that exercises: agent request → CoreDNS resolution → Envoy proxy → credential injection → upstream response. This is the critical path.
-
----
-
 ## Summary
 
-Cagent addresses a real and growing need with a well-designed multi-layered security architecture. The core concept — treating AI agents as untrusted by default and mediating all network access through controlled proxies — is sound. The trust model is well-considered: the local admin is intentionally unauthenticated (operator already owns the host), and the SQL construction risk in log queries is bounded by per-tenant OpenObserve org isolation. The main areas requiring attention are: fixing the Envoy admin exposure and WebSocket info leak, hardening the log query builder, adding observability infrastructure (metrics, tracing, alerting), improving the developer onboarding experience, and establishing CI/CD. The product is at a stage where these investments would have high leverage in moving from a working prototype to a production-grade platform.
+Cagent addresses a real and growing need with a well-designed multi-layered security architecture. The core concept — treating AI agents as untrusted by default and mediating all network access through controlled proxies — is sound. The trust model is well-considered: the local admin is intentionally unauthenticated (operator already owns the host), and the SQL construction risk in log queries is bounded by per-tenant OpenObserve org isolation.
+
+The highest-leverage investments are in **product observability** — the logging infrastructure captures the right data, but users lack the views to act on it. A deny-reason header, rate limit gauges, and credential usage counters would transform the debugging and security monitoring experience. On the usability side, config validation at save-time and an agent introspection API would eliminate the most common friction points in the daily workflow.

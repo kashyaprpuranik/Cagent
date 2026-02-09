@@ -16,7 +16,7 @@ The control plane provides centralized management, policy enforcement, secrets s
 │        │                   │ (read/write logs)                  │
 │        │                   ▼                                    │
 │        │            ┌─────────────┐                             │
-│        └───────────►│ OpenObserve │                             │
+│        └───────────►│  Log Store  │                             │
 │                     │ (logs + UI) │                             │
 │                     └─────────────┘                             │
 │                            ▲                                    │
@@ -272,14 +272,14 @@ The control plane manages multiple data planes, which can run on different machi
 ```
 Data Plane 1                            Control Plane
 ┌─────────────┐                        ┌─────────────┐
-│   Envoy     │ ────── :8002 ───────►  │     API     │
+│ HTTP Proxy  │ ────── :8002 ───────►  │     API     │
 │agent-manager│ ────── :8002 ───────►  │  (manages)  │
 └─────────────┘   (heartbeat + logs)   │             │
                                        │  Multiple   │
 Data Plane 2                           │   Agents    │
 ┌─────────────┐                        │             │
-│   Envoy     │ ────── :8002 ───────►  │     ▼       │
-│agent-manager│ ────── :8002 ───────►  │ OpenObserve │
+│ HTTP Proxy  │ ────── :8002 ───────►  │     ▼       │
+│agent-manager│ ────── :8002 ───────►  │  Log Store  │
 └─────────────┘   (heartbeat + logs)   └─────────────┘
 ```
 

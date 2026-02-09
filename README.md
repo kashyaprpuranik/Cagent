@@ -138,13 +138,13 @@ Lightweight setup with just 3 containers. Edit `cagent.yaml` and run the config 
 │    ┌────────────────────────────────────────────┐     │
 │    │              Agent Container                │     │
 │    │  • Isolated network (no direct internet)    │     │
-│    │  • All HTTP(S) via Envoy                    │     │
-│    │  • DNS via CoreDNS                          │     │
+│    │  • All HTTP(S) via HTTP Proxy                │     │
+│    │  • DNS via DNS Filter                       │     │
 │    └────────────────────────────────────────────┘     │
 │                 │                   │                  │
 │                 ▼                   ▼                  │
 │          ┌───────────┐       ┌───────────┐            │
-│          │   Envoy   │       │  CoreDNS  │            │
+│          │HTTP Proxy │       │DNS Filter │            │
 │          │  (~50MB)  │       │  (~20MB)  │            │
 │          └───────────┘       └───────────┘            │
 └───────────────────────────────────────────────────────┘
@@ -184,7 +184,7 @@ Adds agent-manager (watches `cagent.yaml`) and local admin UI for browser-based 
 │  │    └─────────────────────────────────────────────────┘     ││
 │  │                 │                       │                   ││
 │  │          ┌──────┴──────┐         ┌──────┴──────┐           ││
-│  │          │    Envoy    │         │   CoreDNS   │           ││
+│  │          │ HTTP Proxy  │         │ DNS Filter  │           ││
 │  │          └─────────────┘         └─────────────┘           ││
 │  └─────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
@@ -216,7 +216,7 @@ Run with centralized management via the control plane. Ideal for multiple tenant
 │                          (can run on provider/cloud)                            │
 │                                                                                 │
 │   ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────┐                │
-│   │ Postgres  │  │ Admin UI  │  │OpenObserve│  │  FRP Server   │                │
+│   │    DB     │  │ Frontend  │  │ Log Store │  │Tunnel Server  │                │
 │   │ (secrets) │  │  (:9080)  │  │  (:5080)  │  │    (:7000)    │                │
 │   └────┬────-─┘  └────┬─-────┘  └────┬─-────┘  └───────┬───────┘                │
 │        │              │              │                 │                        │
@@ -239,7 +239,7 @@ Run with centralized management via the control plane. Ideal for multiple tenant
 │             (can run on client laptop or server or provider servers)            │
 │                │                     │                 ▼                        │
 │  ┌─────────────┴────────-───┐                   ┌─────────────────┐            │
-│  │      Agent Manager       │                   │   FRP Client    │            │
+│  │      Agent Manager       │                   │ Tunnel Client   │            │
 │  │ polls CP, syncs configs  │                   │ (STCP to CP)    │            │
 │  │ ships logs to CP         │                   └────────-┬───────┘            │
 │  └──────────────────────────┘                             │                    │
@@ -249,14 +249,14 @@ Run with centralized management via the control plane. Ideal for multiple tenant
 │  │  ┌──────────────────────────────────────────────────────┼────────────────┐ │ │
 │  │  │                     Agent Container                  │                │ │ │
 │  │  │  • Isolated network (no direct internet access)      │                │ │ │
-│  │  │  • All HTTP(S) via Envoy proxy (allowlist enforced) SSH:22            │ │ │
-│  │  │  • DNS via CoreDNS filter (allowlist enforced)       │                │ │ │
+│  │  │  • All HTTP(S) via HTTP proxy (allowlist enforced)  SSH:22            │ │ │
+│  │  │  • DNS via DNS filter (allowlist enforced)           │                │ │ │
 │  │  └──────────────────────────────────────────────────────┼────────────────┘ │ │
 │  │              │                           │              │                  │ │
 │  │              ▼                           ▼              │                  │ │
 │  │       ┌─────────────┐             ┌─────────────┐       │                  │ │
-│  │       │   Envoy     │             │   CoreDNS   │       │                  │ │
-│  │       │  (+ creds)  │             │  (filter)   │       │                  │ │
+│  │       │ HTTP Proxy  │             │ DNS Filter  │       │                  │ │
+│  │       │  (+ creds)  │             │ (allowlist) │       │                  │ │
 │  │       └─────────────┘             └─────────────┘       │                  │ │
 │  └─────────────────────────────────────────────────────────┼──────────────────┘ │
 └────────────────────────────────────────────────────────────┼────────────────────┘

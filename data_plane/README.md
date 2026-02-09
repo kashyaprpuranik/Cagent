@@ -15,13 +15,13 @@ Lightweight 3-container setup (~70MB overhead). Edit configs directly.
 │    ┌────────────────────────────────────────────┐     │
 │    │              Agent Container                │     │
 │    │  • Isolated network (no direct internet)    │     │
-│    │  • All HTTP(S) via Envoy                    │     │
-│    │  • DNS via CoreDNS                          │     │
+│    │  • All HTTP(S) via HTTP Proxy                │     │
+│    │  • DNS via DNS Filter                       │     │
 │    └────────────────────────────────────────────┘     │
 │                 │                   │                  │
 │                 ▼                   ▼                  │
 │          ┌───────────┐       ┌───────────┐            │
-│          │   Envoy   │       │  CoreDNS  │            │
+│          │HTTP Proxy │       │DNS Filter │            │
 │          │  (~50MB)  │       │  (~20MB)  │            │
 │          └─────┬─────┘       └───────────┘            │
 │                │                                       │
@@ -55,7 +55,7 @@ Adds agent-manager and local admin UI for browser-based management.
 │  │    └─────────────────────────────────────────────────┘     ││
 │  │                 │                       │                   ││
 │  │          ┌──────┴──────┐         ┌──────┴──────┐           ││
-│  │          │    Envoy    │         │   CoreDNS   │           ││
+│  │          │ HTTP Proxy  │         │ DNS Filter  │           ││
 │  │          └──────┬──────┘         └─────────────┘           ││
 │  └─────────────────┼───────────────────────────────────────────┘│
 │                    │                                             │
@@ -76,7 +76,7 @@ Connects to centralized control plane for configuration and log shipping.
 │                         DATA PLANE                               │
 │                                                                  │
 │  ┌──────────────┐    ┌──────────┐    ┌──────────┐              │
-│  │Agent Manager │    │  Vector  │    │   frpc   │              │
+│  │Agent Manager │    │Log Ship. │    │ Tunnel   │              │
 │  │ (polls CP)   │    │  (logs)  │    │  (STCP)  │              │
 │  └──────┬───────┘    └────┬─────┘    └────┬─────┘              │
 │         │                  │               │                    │
@@ -87,7 +87,7 @@ Connects to centralized control plane for configuration and log shipping.
 │         │    │  └─────────────────────┘                   │    │
 │         │    │         │           │                      │    │
 │         │    │    ┌────┴────┐ ┌────┴────┐                │    │
-│         │    │    │  Envoy  │ │ CoreDNS │                │    │
+│         │    │    │HTTP Prxy│ │DNS Fltr │                │    │
 │         │    │    └────┬────┘ └─────────┘                │    │
 │         │    └─────────┼──────────────────────────────────┘    │
 └─────────┼──────────────┼───────────────────────────────────────┘
@@ -347,9 +347,9 @@ data_plane/
 ├── configs/
 │   ├── cagent.yaml            # Main configuration file
 │   ├── envoy/
-│   │   └── envoy-enhanced.yaml # Envoy proxy (generated from cagent.yaml)
+│   │   └── envoy-enhanced.yaml # HTTP proxy config (generated from cagent.yaml)
 │   ├── coredns/
-│   │   ├── Corefile            # CoreDNS config (generated from cagent.yaml)
+│   │   ├── Corefile            # DNS filter config (generated from cagent.yaml)
 │   │   └── allowlist.hosts     # Static fallback allowlist
 │   ├── vector/
 │   │   └── vector.yaml         # Log collection config
@@ -360,6 +360,6 @@ data_plane/
 │   ├── local_admin/            # Local admin UI (React + FastAPI)
 │   │   ├── frontend/           # React app
 │   │   └── backend/            # FastAPI backend
-│   └── config_generator/       # cagent.yaml → CoreDNS/Envoy configs
+│   └── config_generator/       # cagent.yaml → DNS filter/HTTP proxy configs
 └── tests/
 ```

@@ -274,7 +274,7 @@ SEED_TOKENS=true docker compose up -d
 └── data_plane/
     ├── docker-compose.yml          # Data plane services
     ├── configs/
-    │   ├── cagent.yaml        # Unified config (generates CoreDNS + Envoy)
+    │   ├── cagent.yaml        # Unified config (generates DNS filter + HTTP proxy)
     │   ├── coredns/            # DNS config (generated from cagent.yaml)
     │   ├── envoy/              # Proxy config (generated from cagent.yaml)
     │   ├── vector/             # Log collection & forwarding
@@ -284,6 +284,6 @@ SEED_TOKENS=true docker compose up -d
     │   ├── local_admin/        # Local admin UI (standalone mode)
     │   │   ├── frontend/       # React app with web terminal
     │   │   └── backend/        # FastAPI backend
-    │   └── config_generator/   # cagent.yaml → CoreDNS/Envoy configs
+    │   └── config_generator/   # cagent.yaml → DNS filter/HTTP proxy configs
     └── tests/                  # Unit and E2E tests
 ```

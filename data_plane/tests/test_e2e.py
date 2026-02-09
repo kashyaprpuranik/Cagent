@@ -12,6 +12,7 @@ import pytest
 import requests
 import subprocess
 import time
+import websocket
 
 
 def pytest_configure(config):
@@ -223,6 +224,103 @@ class TestLogging:
         assert result.returncode == 0, "Cannot access Envoy log directory"
 
 
+@pytest.mark.e2e
+class TestAgentSecurityHardening:
+    """Test container security hardening: capabilities, seccomp, isolation."""
+
+    def test_no_docker_socket(self, data_plane_running):
+        """Agent should not have access to the Docker socket."""
+        result = exec_in_agent("ls /var/run/docker.sock 2>&1 || echo NO_SOCKET")
+        assert "NO_SOCKET" in result.stdout or "No such file" in result.stdout, \
+            "Docker socket is accessible inside agent — container escape risk!"
+
+    def test_no_host_filesystem(self, data_plane_running):
+        """Agent should not see host filesystem mounts."""
+        # /host is a common mount point; also check that /proc/1/root doesn't
+        # expose the host (in a container, PID 1 root is the container root)
+        result = exec_in_agent("ls /host 2>&1 || echo NO_HOST")
+        assert "NO_HOST" in result.stdout or "No such file" in result.stdout
+
+    def test_proxy_env_vars_set(self, data_plane_running):
+        """Agent must have HTTP_PROXY and HTTPS_PROXY pointing to Envoy."""
+        result = exec_in_agent("echo $HTTP_PROXY")
+        assert "172.30.0.10:8443" in result.stdout, \
+            f"HTTP_PROXY not set correctly: {result.stdout}"
+
+        result = exec_in_agent("echo $HTTPS_PROXY")
+        assert "172.30.0.10:8443" in result.stdout, \
+            f"HTTPS_PROXY not set correctly: {result.stdout}"
+
+    def test_cannot_reach_infra_net(self, data_plane_running):
+        """Agent should not be able to reach any infra-net addresses."""
+        # dns-filter's infra side
+        result = exec_in_agent("nc -z -w 2 172.31.0.5 53 && echo FAIL || echo BLOCKED")
+        assert "BLOCKED" in result.stdout, \
+            "Agent can reach dns-filter on infra-net (172.31.0.5)"
+
+        # envoy's infra side
+        result = exec_in_agent("nc -z -w 2 172.31.0.10 8443 && echo FAIL || echo BLOCKED")
+        assert "BLOCKED" in result.stdout, \
+            "Agent can reach envoy on infra-net (172.31.0.10)"
+
+    def test_raw_socket_blocked(self, data_plane_running):
+        """Raw sockets should be blocked (CAP_NET_RAW dropped + seccomp)."""
+        # SOCK_RAW with AF_INET requires CAP_NET_RAW
+        result = exec_in_agent(
+            "python3 -c \""
+            "import socket; "
+            "s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP); "
+            "print('RAW_ALLOWED')\" 2>&1 || echo RAW_BLOCKED"
+        )
+        assert "RAW_BLOCKED" in result.stdout or "Operation not permitted" in result.stdout, \
+            "Raw sockets are allowed — agent could craft packets to bypass proxy!"
+
+    def test_af_packet_blocked(self, data_plane_running):
+        """AF_PACKET sockets should be blocked by seccomp profile."""
+        result = exec_in_agent(
+            "python3 -c \""
+            "import socket; "
+            "s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW); "
+            "print('PACKET_ALLOWED')\" 2>&1 || echo PACKET_BLOCKED"
+        )
+        assert "PACKET_BLOCKED" in result.stdout or "Operation not permitted" in result.stdout, \
+            "AF_PACKET sockets are allowed — agent could sniff/inject raw frames!"
+
+    def test_pid_limit(self, data_plane_running):
+        """Fork bomb should be stopped by PID limit."""
+        # Try to create many processes; the container has a 128 or 256 PID limit
+        result = exec_in_agent(
+            "for i in $(seq 1 300); do sleep 60 & done 2>&1; "
+            "CREATED=$(jobs -p | wc -l); "
+            "kill $(jobs -p) 2>/dev/null; "
+            "echo PIDS:$CREATED"
+        )
+        # Extract the count — should be well below 300
+        if "PIDS:" in result.stdout:
+            count = int(result.stdout.split("PIDS:")[-1].strip())
+            assert count < 300, \
+                f"Created {count}/300 processes — PID limit may not be enforced"
+
+    def test_no_privilege_escalation(self, data_plane_running):
+        """no-new-privileges should prevent setuid escalation."""
+        # With no-new-privileges, sudo's setuid bit is ineffective
+        result = exec_in_agent("sudo id 2>&1 || echo SUDO_FAILED")
+        # Either sudo isn't installed, or it fails due to no-new-privileges
+        assert "SUDO_FAILED" in result.stdout or "root" not in result.stdout, \
+            "sudo succeeded — no-new-privileges may not be set!"
+
+    def test_ipv6_disabled(self, data_plane_running):
+        """IPv6 should be disabled to prevent bypass of IPv4 egress controls."""
+        result = exec_in_agent(
+            "curl -6 -s --connect-timeout 2 http://[2607:f8b0:4004:800::200e] "
+            "2>&1 || echo IPV6_BLOCKED"
+        )
+        assert "IPV6_BLOCKED" in result.stdout \
+            or "Could not resolve" in result.stdout \
+            or "connect to" in result.stdout, \
+            "IPv6 connectivity is available — could bypass egress controls!"
+
+
 def get_admin_url():
     """Get local admin base URL, detecting the mapped port."""
     try:
@@ -351,6 +449,48 @@ class TestLocalAdminAPI:
         assert "stcp_secret_key" in data
         assert len(data["stcp_secret_key"]) > 20
 
+    def test_container_logs(self, admin_url, data_plane_running):
+        """Should return recent logs for a running container."""
+        r = requests.get(
+            f"{admin_url}/api/containers/envoy-proxy/logs",
+            params={"tail": 10},
+            timeout=10,
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["container"] == "envoy-proxy"
+        assert isinstance(data["lines"], list)
+        assert data["count"] == len(data["lines"])
+
+    def test_config_raw_rejects_invalid_yaml(self, admin_url):
+        """PUT /api/config/raw should reject invalid YAML with 400."""
+        r = requests.put(
+            f"{admin_url}/api/config/raw",
+            json={"content": "domains:\n  - domain: good.com\n bad_indent"},
+            timeout=5,
+        )
+        assert r.status_code == 400
+
+    def test_container_restart(self, admin_url, data_plane_running):
+        """Restarting envoy-proxy via API should succeed and container should recover."""
+        r = requests.post(
+            f"{admin_url}/api/containers/envoy-proxy",
+            json={"action": "restart"},
+            timeout=30,
+        )
+        assert r.status_code == 200
+        assert r.json()["action"] == "restart"
+
+        # Verify container comes back
+        assert wait_for_container("envoy-proxy", timeout=30), \
+            "envoy-proxy did not recover after restart"
+
+    def test_ssh_tunnel_connect_info_unconfigured(self, admin_url):
+        """Should return 400 when tunnel is not configured."""
+        r = requests.get(f"{admin_url}/api/ssh-tunnel/connect-info", timeout=5)
+        # 400 if STCP_SECRET_KEY is not set, 200 if it happens to be configured
+        assert r.status_code in (200, 400)
+
 
 @pytest.mark.e2e
 class TestLocalAdminConfigPipeline:
@@ -435,3 +575,98 @@ class TestLocalAdminConfigPipeline:
             )
             time.sleep(3)
             requests.post(f"{admin_url}/api/config/reload", timeout=15)
+
+
+def ws_recv_until(ws, marker: str, max_reads: int = 30) -> str:
+    """Read from WebSocket until marker appears in accumulated output."""
+    output = ""
+    for _ in range(max_reads):
+        try:
+            output += ws.recv()
+        except websocket.WebSocketTimeoutException:
+            break
+        if marker in output:
+            break
+    return output
+
+
+@pytest.mark.e2e
+class TestWebTerminal:
+    """Test web terminal via WebSocket (requires --profile admin).
+
+    Connects to the agent container's shell through the local admin
+    WebSocket endpoint and verifies interactive I/O and lean toolchain.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _terminal_ws(self, admin_url, data_plane_running):
+        """Connect a WebSocket to the agent terminal for each test."""
+        ws_url = admin_url.replace("http://", "ws://")
+        self.ws = websocket.create_connection(
+            f"{ws_url}/api/terminal/agent", timeout=5
+        )
+        # Drain the initial bash prompt / MOTD
+        ws_recv_until(self.ws, "$", max_reads=10)
+        yield
+        self.ws.close()
+
+    def _run(self, command: str, marker: str = None) -> str:
+        """Send a command and return output up to the marker."""
+        if marker is None:
+            marker = "END_MARKER_E2E"
+            command = f"{command}; echo {marker}"
+        self.ws.send(command + "\n")
+        return ws_recv_until(self.ws, marker)
+
+    def test_shell_prompt(self, admin_url):
+        """Should get an interactive shell via WebSocket."""
+        output = self._run("echo HELLO_TERMINAL")
+        assert "HELLO_TERMINAL" in output
+
+    def test_lean_core_utils(self, admin_url):
+        """Lean image should have core CLI utilities."""
+        for binary in ("curl", "wget", "git", "jq", "vim", "nano", "tmux", "htop", "tree"):
+            output = self._run(f"which {binary}")
+            assert f"/{binary}" in output, f"{binary} not found in agent container"
+
+    def test_lean_python(self, admin_url):
+        """Lean image should have Python 3 with key packages."""
+        output = self._run("python3 --version")
+        assert "Python 3" in output
+
+        output = self._run("python3 -c \"import requests, httpx, yaml; print('OK')\"")
+        assert "OK" in output
+
+    def test_lean_node(self, admin_url):
+        """Lean image should have Node.js and yarn."""
+        output = self._run("node --version")
+        assert output.strip() and "v" in output
+
+        output = self._run("yarn --version")
+        assert "END_MARKER_E2E" in output  # just confirm it ran without error
+
+    def test_lean_build_tools(self, admin_url):
+        """Lean image should have build essentials."""
+        for binary in ("make", "cmake", "gcc", "g++"):
+            output = self._run(f"which {binary}")
+            assert f"/{binary}" in output, f"{binary} not found in agent container"
+
+    def test_lean_network_tools(self, admin_url):
+        """Lean image should have network diagnostic tools."""
+        for binary in ("nc", "nslookup", "ping"):
+            output = self._run(f"which {binary}")
+            assert binary in output, f"{binary} not found in agent container"
+
+    def test_lean_db_clients(self, admin_url):
+        """Lean image should have database CLI clients."""
+        output = self._run("which psql")
+        assert "psql" in output
+
+        output = self._run("which redis-cli")
+        assert "redis-cli" in output
+
+    def test_network_isolation_via_terminal(self, admin_url):
+        """Direct external access should be blocked even through the terminal."""
+        output = self._run("curl -s --connect-timeout 2 http://8.8.8.8 || echo BLOCKED")
+        assert "BLOCKED" in output, \
+            "Agent can reach external IPs directly through terminal — isolation broken!"

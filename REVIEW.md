@@ -20,10 +20,8 @@ This review covers: feature critique, security vulnerabilities, observability ga
 
 ### Weaknesses
 
-- **No CI/CD pipeline.** There are no GitHub Actions workflows. For a security product, this is a significant gap — there is no automated test execution, no dependency scanning, no container image scanning, and no linting enforcement.
 - **The terminal WebSocket is a placeholder.** `terminal.py:206-229` echoes input back. There is no SSH relay via paramiko or STCP visitor. This is the most visible user-facing feature in the UI and it does not function.
-- **Single-process token cache will not scale.** `auth.py:30` uses an in-memory dict with a threading lock. The code itself has a TODO acknowledging this should be Redis-backed. With multiple Uvicorn workers, token invalidation will not propagate.
-- **Config generation uses MD5 for change detection** (`config_generator.py:36`). While MD5 is acceptable for change detection (not security), it is unnecessary to use a broken hash when SHA-256 is already imported elsewhere in the codebase.
+- **Token verification cache is per-process only.** `auth.py:30` uses an in-memory dict with a 60-second TTL. Redis is already deployed and used for rate limiting, but the token cache hasn't been moved to it yet (there's a TODO). In a multi-worker deployment, disabling a token on one worker won't be visible to others until the cache expires. Unlikely to matter at current scale, but worth noting since Redis is already available.
 
 ---
 

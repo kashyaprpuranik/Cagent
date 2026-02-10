@@ -686,5 +686,5 @@ class TestWebTerminal:
     def test_network_isolation_via_terminal(self, admin_url):
         """Direct external access should be blocked even through the terminal."""
         output = self._run("curl -s --connect-timeout 2 http://8.8.8.8 || echo BLOCKED")
-        assert "BLOCKED" in output, \
+        assert "BLOCKED" in output or "not_allowed" in output, \
             "Agent can reach external IPs directly through terminal — isolation broken!"

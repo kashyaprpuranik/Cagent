@@ -38,7 +38,7 @@ teardown() {
     echo "=== Tearing down e2e infrastructure ==="
     cd "$REPO_ROOT/data_plane" && docker compose -f docker-compose.yml -f "$SCRIPT_DIR/docker-compose.e2e.yml" \
         --profile dev --profile managed down 2>/dev/null || true
-    cd "$REPO_ROOT/control_plane" && docker compose down 2>/dev/null || true
+    cd "$REPO_ROOT/control_plane" && docker compose down -v 2>/dev/null || true
     docker rm -f openobserve-mock echo-server 2>/dev/null || true
     docker network rm e2e-bridge 2>/dev/null || true
     rm -f "$SCRIPT_DIR/.agent-token"
@@ -100,12 +100,13 @@ HTTPServer(('0.0.0.0',5080),H).serve_forever()
 
     # 6. Create agent token
     local ADMIN_TOKEN="admin-test-token-do-not-use-in-production"
-    AGENT_TOKEN=$(curl -sf -X POST "http://localhost:8002/api/v1/tokens" \
+    local TOKEN_RESPONSE
+    TOKEN_RESPONSE=$(curl -s -X POST "http://localhost:8002/api/v1/tokens" \
         -H "Authorization: Bearer $ADMIN_TOKEN" \
         -H "Content-Type: application/json" \
-        -d '{"name":"e2e-agent-token","token_type":"agent","agent_id":"e2e-agent"}' \
-        | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['token'])")
-    if [ -z "$AGENT_TOKEN" ]; then echo "ERROR: Failed to create agent token"; exit 1; fi
+        -d '{"name":"e2e-agent-token","token_type":"agent","agent_id":"e2e-agent"}')
+    AGENT_TOKEN=$(echo "$TOKEN_RESPONSE" | python3 -c "import sys,json; data=json.loads(sys.stdin.read()); print(data.get('token',''))" 2>/dev/null)
+    if [ -z "$AGENT_TOKEN" ]; then echo "ERROR: Failed to create agent token. Response: $TOKEN_RESPONSE"; exit 1; fi
     echo "$AGENT_TOKEN" > "$SCRIPT_DIR/.agent-token"
     echo "Agent token created."
 

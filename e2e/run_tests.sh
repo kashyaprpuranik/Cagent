@@ -14,10 +14,12 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(dirname "$SCRIPT_DIR")
 TEARDOWN=true
 INFRA_STARTED=false
+REUSE=false
 
 for arg in "$@"; do
     case "$arg" in
         --no-teardown) TEARDOWN=false ;;
+        --reuse)       REUSE=true ;;
     esac
 done
 
@@ -25,7 +27,7 @@ done
 PYTEST_ARGS=()
 for arg in "$@"; do
     case "$arg" in
-        --no-teardown) ;;
+        --no-teardown|--reuse) ;;
         *) PYTEST_ARGS+=("$arg") ;;
     esac
 done
@@ -85,10 +87,10 @@ class H(BaseHTTPRequestHandler):
 HTTPServer(('0.0.0.0',5080),H).serve_forever()
 "
 
-    # 4. CP API
+    # 4. CP API (--build ensures code changes are picked up)
     SEED_TOKENS=true \
     OPENOBSERVE_URL=http://openobserve-mock:5080 \
-    docker compose up -d backend
+    docker compose up -d --build backend
     echo "Waiting for CP API..."
     until curl -sf http://localhost:8002/health >/dev/null 2>&1; do sleep 1; done
     echo "CP API healthy."
@@ -141,7 +143,7 @@ PYEOF
     HEARTBEAT_INTERVAL=5 \
     CONFIG_SYNC_INTERVAL=10 \
     docker compose -f docker-compose.yml -f "$SCRIPT_DIR/docker-compose.e2e.yml" \
-        --profile dev --profile managed up -d
+        --profile dev --profile managed up -d --build
 
     # 9. Connect agent-manager to bridge
     docker network connect e2e-bridge agent-manager 2>/dev/null || true
@@ -188,8 +190,8 @@ is_ready() {
 echo "=== CP + DP End-to-End Tests ==="
 echo ""
 
-if is_ready; then
-    echo "Infrastructure already running, reusing existing setup."
+if [ "$REUSE" = true ] && is_ready; then
+    echo "Infrastructure already running, reusing existing setup (--reuse)."
 else
     # Tear down any partial state before fresh setup
     teardown 2>/dev/null || true

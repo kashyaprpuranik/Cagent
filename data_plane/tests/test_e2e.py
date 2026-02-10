@@ -582,7 +582,7 @@ class TestLocalAdminConfigPipeline:
             requests.put(
                 f"{admin_url}/api/config/raw",
                 json={"content": original_raw},
-                timeout=5,
+                timeout=30,
             )
             subprocess.run(
                 ["docker", "restart", "agent-manager"],
@@ -595,11 +595,16 @@ class TestLocalAdminConfigPipeline:
 def ws_recv_until(ws, marker: str, max_reads: int = 30) -> str:
     """Read from WebSocket until marker appears in accumulated output."""
     output = ""
+    consecutive_timeouts = 0
     for _ in range(max_reads):
         try:
             output += ws.recv()
+            consecutive_timeouts = 0
         except websocket.WebSocketTimeoutException:
-            break
+            consecutive_timeouts += 1
+            if consecutive_timeouts >= 3:
+                break
+            continue
         if marker in output:
             break
     return output

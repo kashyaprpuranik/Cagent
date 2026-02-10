@@ -37,7 +37,7 @@ teardown() {
     echo ""
     echo "=== Tearing down e2e infrastructure ==="
     cd "$REPO_ROOT/data_plane" && docker compose -f docker-compose.yml -f "$SCRIPT_DIR/docker-compose.e2e.yml" \
-        --profile dev --profile managed down 2>/dev/null || true
+        --profile dev --profile managed --profile email down 2>/dev/null || true
     cd "$REPO_ROOT/control_plane" && docker compose down -v 2>/dev/null || true
     docker rm -f openobserve-mock echo-server 2>/dev/null || true
     docker network rm e2e-bridge 2>/dev/null || true

@@ -52,7 +52,7 @@ if [ "$E2E" = true ]; then
     AGENT_SERVICE=$(docker inspect agent --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
     if [ "$AGENT_SERVICE" = "agent" ]; then
         echo "Agent is running with standard profile (gVisor), tearing down to restart with dev profile..."
-        docker compose --profile standard --profile admin down 2>/dev/null || true
+        docker compose --profile standard --profile admin --profile email down 2>/dev/null || true
         NEED_RESTART=true
     elif [ -z "$AGENT_SERVICE" ]; then
         NEED_RESTART=true
@@ -73,7 +73,7 @@ if [ "$E2E" = true ]; then
         ADMIN_MODE=$(curl -sf http://localhost:8081/api/info 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('mode',''))" 2>/dev/null || true)
         if [ "$ADMIN_MODE" = "connected" ]; then
             echo "Data plane is running in connected mode, restarting in standalone mode..."
-            docker compose --profile dev --profile admin down 2>/dev/null || true
+            docker compose --profile dev --profile admin --profile email down 2>/dev/null || true
             NEED_RESTART=true
         fi
     fi
@@ -95,7 +95,7 @@ if [ "$E2E" = true ]; then
     if [ "$CONTAINERS_STARTED" = true ]; then
         echo ""
         echo "Stopping containers started by this script..."
-        docker compose --profile dev --profile admin down
+        docker compose --profile dev --profile admin --profile email down
     fi
 
     exit $E2E_EXIT

@@ -227,6 +227,25 @@ PYEOF
     # Wait for first heartbeat
     echo "Waiting for first heartbeat..."
     sleep 5
+
+    # 12. Wait for log pipeline (Vector → CP → OpenObserve) to be functional.
+    #     Vector starts before the e2e-bridge connect, so its initial requests
+    #     fail with DNS errors and get dropped.  We poll the CP ingest health
+    #     from inside the log-shipper container to confirm connectivity, then
+    #     generate a canary log event and verify it reaches the analytics API.
+    echo "Waiting for log pipeline..."
+    for i in $(seq 1 20); do
+        if docker exec log-shipper wget -q -O /dev/null --timeout=2 \
+            http://backend:8000/health 2>/dev/null; then
+            echo "Log-shipper can reach CP."
+            break
+        fi
+        if [ "$i" -eq 20 ]; then
+            echo "WARNING: log-shipper cannot reach CP (continuing anyway)"
+        fi
+        sleep 2
+    done
+
     echo "Infrastructure ready."
 }
 

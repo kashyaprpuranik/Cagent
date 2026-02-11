@@ -583,9 +583,17 @@ class TestAnalytics:
 
     def test_blocked_domains_via_cp(self, cp_running, admin_headers):
         """Blocked domains should appear in CP analytics after log ingestion."""
-        # Longer timeout: on fresh startup, Envoy flush + Vector batch + CP
-        # forwarding to OpenObserve can take 30-40s before logs appear.
-        entry = self._wait_for_blocked_in_cp(admin_headers, timeout=60.0)
+        # On fresh startup, Vector's initial requests may fail (DNS not ready
+        # until e2e-bridge connect) and get dropped as non-retriable.  If the
+        # first traffic batch isn't found, generate fresh traffic and retry.
+        entry = self._wait_for_blocked_in_cp(admin_headers, timeout=45.0)
+        if entry is None:
+            for _ in range(3):
+                exec_in_agent(
+                    f"curl -s -o /dev/null -x {PROXY} "
+                    f"--connect-timeout 5 http://{self.BLOCKED_DOMAIN}/retry"
+                )
+            entry = self._wait_for_blocked_in_cp(admin_headers, timeout=30.0)
         assert entry is not None, (
             f"{self.BLOCKED_DOMAIN} not found in CP analytics after traffic + wait. "
             "Logs may not have been ingested yet."

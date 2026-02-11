@@ -78,6 +78,10 @@ if [ "$E2E" = true ]; then
         fi
     fi
 
+    # Snapshot tracked config files that containers modify at runtime
+    cp configs/cagent.yaml configs/.cagent.yaml.bak
+    cp configs/coredns/Corefile configs/coredns/.Corefile.bak
+
     if [ "$NEED_RESTART" = true ]; then
         echo "Stopping any existing containers first..."
         docker compose --profile dev --profile admin --profile email --profile auditing down 2>/dev/null || true
@@ -114,6 +118,10 @@ if [ "$E2E" = true ]; then
         echo "Stopping containers started by this script..."
         docker compose --profile dev --profile admin --profile email --profile auditing down 2>/dev/null || true
     fi
+
+    # Restore tracked config files modified by containers at runtime
+    mv configs/.cagent.yaml.bak configs/cagent.yaml 2>/dev/null || true
+    mv configs/coredns/.Corefile.bak configs/coredns/Corefile 2>/dev/null || true
 
     exit $E2E_EXIT
 else

@@ -45,6 +45,11 @@ teardown() {
     rm -f "$SCRIPT_DIR/.cagent.e2e.yaml"
     rm -f "$SCRIPT_DIR/.cagent.yaml.bak"
 
+    # Restore tracked config files modified by agent-manager at runtime
+    cd "$REPO_ROOT/data_plane"
+    mv configs/.cagent.yaml.bak configs/cagent.yaml 2>/dev/null || true
+    mv configs/coredns/.Corefile.bak configs/coredns/Corefile 2>/dev/null || true
+
     echo "Torn down."
 }
 
@@ -52,6 +57,10 @@ teardown() {
 setup() {
     echo "=== Setting up e2e infrastructure ==="
     INFRA_STARTED=true
+
+    # Snapshot tracked config files that containers modify at runtime
+    cp "$REPO_ROOT/data_plane/configs/cagent.yaml" "$REPO_ROOT/data_plane/configs/.cagent.yaml.bak"
+    cp "$REPO_ROOT/data_plane/configs/coredns/Corefile" "$REPO_ROOT/data_plane/configs/coredns/.Corefile.bak"
 
     # 1. Shared bridge network for CP ↔ DP communication
     docker network create e2e-bridge 2>/dev/null || true

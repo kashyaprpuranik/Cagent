@@ -260,6 +260,7 @@ export interface DomainPolicy {
   bytes_per_hour?: number;
   timeout?: string;
   read_only?: boolean;
+  expires_at?: string;
   has_credential: boolean;
   credential_header?: string;
   credential_format?: string;
@@ -285,6 +286,7 @@ export interface CreateDomainPolicyRequest {
   bytes_per_hour?: number;
   timeout?: string;
   read_only?: boolean;
+  expires_at?: string;
   credential?: DomainPolicyCredential;
 }
 

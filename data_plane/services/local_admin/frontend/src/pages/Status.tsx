@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -17,12 +17,16 @@ import {
   Shield,
   Mail,
 } from 'lucide-react';
-import { BlockedDomainsWidget } from '@cagent/shared-ui';
+import { BlockedDomainsWidget, BlockedTimeseriesChart, BandwidthWidget, DiagnoseModal } from '@cagent/shared-ui';
+import type { DiagnoseResult } from '@cagent/shared-ui';
 import {
   getContainers,
   controlContainer,
   getDetailedHealth,
   getBlockedDomains,
+  getBlockedTimeseries,
+  getBandwidth,
+  getDiagnosis,
   getConfig,
   getInfo,
   ContainerInfo,
@@ -255,6 +259,18 @@ export default function StatusPage() {
     refetchInterval: 30_000,
   });
 
+  const { data: timeseriesData, isLoading: timeseriesLoading } = useQuery({
+    queryKey: ['blocked-timeseries'],
+    queryFn: () => getBlockedTimeseries(),
+    refetchInterval: 30_000,
+  });
+
+  const { data: bandwidthData, isLoading: bandwidthLoading } = useQuery({
+    queryKey: ['bandwidth'],
+    queryFn: () => getBandwidth(),
+    refetchInterval: 30_000,
+  });
+
   const { data: configData } = useQuery({
     queryKey: ['config'],
     queryFn: getConfig,
@@ -272,6 +288,25 @@ export default function StatusPage() {
 
   const isConnected = infoData?.mode === 'connected';
 
+  // Diagnose modal state
+  const [diagnosingDomain, setDiagnosingDomain] = useState<string | null>(null);
+  const [diagnoseResult, setDiagnoseResult] = useState<DiagnoseResult | null>(null);
+  const [diagnoseLoading, setDiagnoseLoading] = useState(false);
+
+  const handleDiagnose = async (domain: string) => {
+    setDiagnosingDomain(domain);
+    setDiagnoseResult(null);
+    setDiagnoseLoading(true);
+    try {
+      const result = await getDiagnosis(domain);
+      setDiagnoseResult(result);
+    } catch {
+      setDiagnoseResult(null);
+    } finally {
+      setDiagnoseLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -288,14 +323,31 @@ export default function StatusPage() {
       {/* Health Panel */}
       <HealthPanel />
 
+      {/* Timeseries Chart */}
+      <BlockedTimeseriesChart
+        buckets={timeseriesData?.buckets || []}
+        isLoading={timeseriesLoading}
+      />
+
       {/* Blocked Domains Widget */}
       <BlockedDomainsWidget
         domains={blockedData?.blocked_domains || []}
         allowlisted={allowlisted}
         onAdd={(domain) => navigate(`/config?add-domain=${encodeURIComponent(domain)}`)}
+        onBulkAdd={!isConnected ? (domains) => {
+          navigate(`/config?add-domains=${domains.map(encodeURIComponent).join(',')}`);
+        } : undefined}
+        onDiagnose={handleDiagnose}
         isLoading={blockedLoading}
         readOnly={isConnected}
         windowHours={blockedData?.window_hours}
+      />
+
+      {/* Bandwidth Widget */}
+      <BandwidthWidget
+        domains={bandwidthData?.domains || []}
+        isLoading={bandwidthLoading}
+        windowHours={bandwidthData?.window_hours}
       />
 
       {/* Containers */}
@@ -318,6 +370,17 @@ export default function StatusPage() {
           </div>
         )}
       </div>
+
+      {/* Diagnose Modal */}
+      {diagnosingDomain && (
+        <DiagnoseModal
+          domain={diagnosingDomain}
+          result={diagnoseResult}
+          isLoading={diagnoseLoading}
+          onClose={() => setDiagnosingDomain(null)}
+          onAdd={(domain) => navigate(`/config?add-domain=${encodeURIComponent(domain)}`)}
+        />
+      )}
     </div>
   );
 }

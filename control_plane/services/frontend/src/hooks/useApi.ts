@@ -234,6 +234,41 @@ export function useBlockedDomains(agentId?: string | null, hours?: number) {
   });
 }
 
+export function useBlockedTimeseries(agentId?: string | null, hours?: number) {
+  return useQuery({
+    queryKey: ['blockedTimeseries', agentId, hours],
+    queryFn: () => api.getBlockedTimeseries({
+      agentId: agentId ?? undefined,
+      hours: hours ?? 1,
+    }),
+    refetchInterval: 30_000,
+    enabled: !!agentId,
+  });
+}
+
+export function useBandwidth(agentId?: string | null, hours?: number) {
+  return useQuery({
+    queryKey: ['bandwidth', agentId, hours],
+    queryFn: () => api.getBandwidth({
+      agentId: agentId ?? undefined,
+      hours: hours ?? 1,
+    }),
+    refetchInterval: 30_000,
+    enabled: !!agentId,
+  });
+}
+
+export function useDiagnosis(domain: string | null, agentId?: string | null) {
+  return useQuery({
+    queryKey: ['diagnosis', domain, agentId],
+    queryFn: () => api.getDiagnosis({
+      domain: domain!,
+      agentId: agentId ?? undefined,
+    }),
+    enabled: !!domain,
+  });
+}
+
 // Egress Policies (API route: /domain-policies)
 export function useDomainPolicies(params?: { agentId?: string; tenantId?: number | null }) {
   return useQuery({

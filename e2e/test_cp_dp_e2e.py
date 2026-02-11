@@ -28,20 +28,18 @@ AGENT_ID = "e2e-agent"
 
 @pytest.fixture(scope="session")
 def cp_running():
-    """Skip all tests if CP is unreachable."""
-    try:
-        r = requests.get(f"{CP_BASE}/health", timeout=5)
-        r.raise_for_status()
-    except Exception:
-        pytest.skip("Control plane not reachable — run ./run.sh first")
+    """Verify CP is reachable (guaranteed by run_tests.sh)."""
+    r = requests.get(f"{CP_BASE}/health", timeout=5)
+    assert r.status_code == 200, \
+        f"Control plane not reachable at {CP_BASE} — run_tests.sh should have started it"
 
 
 @pytest.fixture(scope="session")
 def agent_token():
-    """Read the agent token written by run.sh."""
+    """Read the agent token written by run_tests.sh."""
     token_file = SCRIPT_DIR / ".agent-token"
-    if not token_file.exists():
-        pytest.skip(".agent-token not found — run ./run.sh first")
+    assert token_file.exists(), \
+        f"{token_file} not found — run_tests.sh should have created it"
     return token_file.read_text().strip()
 
 
@@ -539,4 +537,247 @@ class TestLogContent:
         assert str(entry.get("response_code")) == "403", (
             f"Expected response_code=403 in log, got: "
             f"{entry.get('response_code')}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestAnalytics
+# ---------------------------------------------------------------------------
+
+class TestAnalytics:
+    """Verify analytics endpoints on the control plane."""
+
+    BLOCKED_DOMAIN = "analytics-cp-e2e.example.com"
+
+    @pytest.fixture(autouse=True)
+    def _generate_traffic(self, cp_running):
+        """Generate blocked traffic via the agent proxy before each test."""
+        for _ in range(3):
+            exec_in_agent(
+                f"curl -s -o /dev/null -x {PROXY} "
+                f"--connect-timeout 5 http://{self.BLOCKED_DOMAIN}/test"
+            )
+        # Also generate allowed traffic for bandwidth test
+        exec_in_agent(
+            f"curl -s -o /dev/null -x {PROXY} "
+            f"--connect-timeout 5 http://openai.devbox.local/v1/models"
+        )
+
+    def _wait_for_blocked_in_cp(self, admin_headers, timeout=30.0, poll=2.0):
+        """Poll the CP blocked-domains endpoint until our domain appears."""
+        deadline = time.time() + timeout
+        while True:
+            r = requests.get(
+                f"{CP_BASE}/api/v1/analytics/blocked-domains",
+                headers=admin_headers,
+                params={"agent_id": AGENT_ID, "hours": 1, "limit": 50},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                for d in r.json().get("blocked_domains", []):
+                    if d["domain"] == self.BLOCKED_DOMAIN:
+                        return d
+            if time.time() >= deadline:
+                return None
+            time.sleep(poll)
+
+    def test_blocked_domains_via_cp(self, cp_running, admin_headers):
+        """Blocked domains should appear in CP analytics after log ingestion."""
+        # Longer timeout: on fresh startup, Envoy flush + Vector batch + CP
+        # forwarding to OpenObserve can take 30-40s before logs appear.
+        entry = self._wait_for_blocked_in_cp(admin_headers, timeout=60.0)
+        assert entry is not None, (
+            f"{self.BLOCKED_DOMAIN} not found in CP analytics after traffic + wait. "
+            "Logs may not have been ingested yet."
+        )
+        assert entry["count"] >= 1
+        assert "last_seen" in entry
+
+    def test_bandwidth_via_cp(self, cp_running, admin_headers):
+        """Bandwidth endpoint should return data for agent traffic."""
+        # Wait a bit for logs to be ingested
+        time.sleep(5)
+        r = requests.get(
+            f"{CP_BASE}/api/v1/analytics/bandwidth",
+            headers=admin_headers,
+            params={"agent_id": AGENT_ID, "hours": 1, "limit": 20},
+            timeout=10,
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "domains" in data
+        assert "window_hours" in data
+        assert isinstance(data["domains"], list)
+        # Verify entry structure if data is present
+        if data["domains"]:
+            entry = data["domains"][0]
+            assert "domain" in entry
+            assert "bytes_sent" in entry
+            assert "bytes_received" in entry
+            assert "total_bytes" in entry
+            assert "request_count" in entry
+
+    def test_timeseries_via_cp(self, cp_running, admin_headers):
+        """Timeseries endpoint should return bucketed data."""
+        time.sleep(5)
+        r = requests.get(
+            f"{CP_BASE}/api/v1/analytics/blocked-domains/timeseries",
+            headers=admin_headers,
+            params={"agent_id": AGENT_ID, "hours": 1, "buckets": 6},
+            timeout=10,
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "buckets" in data
+        assert "window_hours" in data
+        assert "bucket_minutes" in data
+        assert len(data["buckets"]) == 6
+        for bucket in data["buckets"]:
+            assert "start" in bucket
+            assert "end" in bucket
+            assert "count" in bucket
+            assert isinstance(bucket["count"], int)
+
+    def test_diagnose_via_cp(self, cp_running, admin_headers):
+        """Diagnose endpoint should return diagnostic result."""
+        time.sleep(5)
+        r = requests.get(
+            f"{CP_BASE}/api/v1/analytics/diagnose",
+            headers=admin_headers,
+            params={"domain": self.BLOCKED_DOMAIN, "agent_id": AGENT_ID},
+            timeout=10,
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["domain"] == self.BLOCKED_DOMAIN
+        assert data["in_allowlist"] is False
+        assert "recent_requests" in data
+        assert "diagnosis" in data
+        assert "not in the allowlist" in data["diagnosis"]
+
+    def test_analytics_tenant_isolation(self, cp_running, acme_admin_headers):
+        """Acme admin should not see default tenant's analytics data."""
+        r = requests.get(
+            f"{CP_BASE}/api/v1/analytics/blocked-domains",
+            headers=acme_admin_headers,
+            params={"agent_id": AGENT_ID, "hours": 1},
+            timeout=10,
+        )
+        # Should either get 403 (agent not found for this tenant) or 404
+        assert r.status_code in (403, 404), (
+            f"Expected 403/404 for cross-tenant analytics, got {r.status_code}: {r.text}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestDomainPolicyTTL
+# ---------------------------------------------------------------------------
+
+class TestDomainPolicyTTL:
+    """Verify domain policy TTL (expires_at) behavior."""
+
+    TTL_DOMAIN = "ttl-e2e-test.example.com"
+
+    @pytest.fixture(autouse=True)
+    def _cleanup_ttl_policy(self, admin_headers):
+        """Clean up TTL test policies after each test.
+
+        Tracks policy IDs created during the test and deletes by ID directly,
+        because the list endpoint filters out expired policies.
+        """
+        self._created_policy_ids = []
+        yield
+        for policy_id in self._created_policy_ids:
+            requests.delete(
+                f"{CP_BASE}/api/v1/domain-policies/{policy_id}",
+                headers=admin_headers,
+            )
+
+    def _create_ttl_policy(self, admin_headers, expires_at):
+        """Helper: create a TTL policy and track its ID for cleanup."""
+        r = requests.post(
+            f"{CP_BASE}/api/v1/domain-policies",
+            headers=admin_headers,
+            json={
+                "domain": self.TTL_DOMAIN,
+                "expires_at": expires_at,
+            },
+        )
+        assert r.status_code == 200, f"Failed to create TTL policy: {r.text}"
+        self._created_policy_ids.append(r.json()["id"])
+        return r.json()
+
+    def test_create_policy_with_expires_at(self, cp_running, admin_headers, agent_headers):
+        """Create a policy with expires_at, verify it appears in list and export."""
+        from datetime import datetime, timedelta, timezone
+        expires = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+
+        data = self._create_ttl_policy(admin_headers, expires)
+        assert data["domain"] == self.TTL_DOMAIN
+        assert data["expires_at"] is not None
+
+        # Should appear in list
+        r = requests.get(
+            f"{CP_BASE}/api/v1/domain-policies", headers=admin_headers
+        )
+        assert r.status_code == 200
+        domains = [p["domain"] for p in r.json()]
+        assert self.TTL_DOMAIN in domains
+
+        # Should appear in export
+        r = requests.get(
+            f"{CP_BASE}/api/v1/domain-policies/export", headers=agent_headers
+        )
+        assert r.status_code == 200
+        assert self.TTL_DOMAIN in r.json()["domains"]
+
+    def test_expired_policy_filtered(self, cp_running, admin_headers, agent_headers):
+        """An expired policy should be filtered from list, export, and for-domain."""
+        from datetime import datetime, timedelta, timezone
+        expires = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
+
+        self._create_ttl_policy(admin_headers, expires)
+
+        # Wait for expiry
+        time.sleep(4)
+
+        # Should NOT appear in list
+        r = requests.get(
+            f"{CP_BASE}/api/v1/domain-policies", headers=admin_headers
+        )
+        assert r.status_code == 200
+        domains = [p["domain"] for p in r.json()]
+        assert self.TTL_DOMAIN not in domains, (
+            f"{self.TTL_DOMAIN} still in policy list after expiry"
+        )
+
+        # Should NOT appear in export
+        r = requests.get(
+            f"{CP_BASE}/api/v1/domain-policies/export", headers=agent_headers
+        )
+        assert r.status_code == 200
+        assert self.TTL_DOMAIN not in r.json()["domains"], (
+            f"{self.TTL_DOMAIN} still in export after expiry"
+        )
+
+    def test_policy_for_domain_respects_expiry(self, cp_running, admin_headers, agent_headers):
+        """for-domain lookup should not match an expired policy."""
+        from datetime import datetime, timedelta, timezone
+        expires = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
+
+        self._create_ttl_policy(admin_headers, expires)
+
+        # Wait for expiry
+        time.sleep(4)
+
+        # for-domain should return matched=false
+        r = requests.get(
+            f"{CP_BASE}/api/v1/domain-policies/for-domain",
+            headers=agent_headers,
+            params={"domain": self.TTL_DOMAIN},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["matched"] is False, (
+            f"Expired policy still matched for {self.TTL_DOMAIN}: {data}"
         )

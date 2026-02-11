@@ -92,16 +92,21 @@ if [ "$E2E" = true ]; then
             docker network rm "$net" 2>/dev/null || true
         done
         echo "Starting data plane (standalone, --profile dev --profile admin --profile auditing)..."
-        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d
+        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build
         CONTAINERS_STARTED=true
         echo "Waiting for containers to stabilize..."
         sleep 5
     else
-        echo "Data plane already running correctly (standalone, dev + admin profiles)."
+        echo "Data plane already running, rebuilding images in case code changed..."
+        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build
+        echo "Waiting for containers to stabilize..."
+        sleep 5
     fi
 
+    set +e
     pytest tests/test_e2e.py -v "${PYTEST_ARGS[@]}"
     E2E_EXIT=$?
+    set -e
 
     # Tear down containers only if we started them
     if [ "$CONTAINERS_STARTED" = true ]; then

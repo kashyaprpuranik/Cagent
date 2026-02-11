@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, Request
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
@@ -16,6 +17,12 @@ from control_plane.auth import TokenInfo, verify_token, require_admin_role, requ
 from control_plane.rate_limit import limiter
 
 router = APIRouter()
+
+
+def _filter_not_expired(query):
+    """Add filter to exclude expired policies (expires_at IS NULL OR expires_at > now)."""
+    now = datetime.utcnow()
+    return query.filter(or_(DomainPolicy.expires_at.is_(None), DomainPolicy.expires_at > now))
 
 
 def match_domain(pattern: str, domain: str) -> bool:
@@ -45,6 +52,7 @@ def domain_policy_to_response(policy: DomainPolicy) -> dict:
         "bytes_per_hour": policy.bytes_per_hour,
         "timeout": policy.timeout,
         "read_only": policy.read_only,
+        "expires_at": policy.expires_at,
         "has_credential": policy.credential_value_encrypted is not None,
         "credential_header": policy.credential_header,
         "credential_format": policy.credential_format,
@@ -109,6 +117,9 @@ async def list_domain_policies(
             (DomainPolicy.agent_id == agent_id) | (DomainPolicy.agent_id.is_(None))
         )
 
+    # Filter out expired policies
+    query = _filter_not_expired(query)
+
     policies = query.order_by(DomainPolicy.domain).all()
     return [domain_policy_to_response(p) for p in policies]
 
@@ -158,6 +169,7 @@ async def create_domain_policy(
         bytes_per_hour=policy.bytes_per_hour,
         timeout=policy.timeout,
         read_only=policy.read_only or False,
+        expires_at=policy.expires_at,
         credential_header=policy.credential.header if policy.credential else None,
         credential_format=policy.credential.format if policy.credential else None,
         credential_value_encrypted=encrypted_value,
@@ -206,6 +218,9 @@ async def get_policy_for_domain(
         if not token_info.tenant_id:
             raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
         query = query.filter(DomainPolicy.tenant_id == token_info.tenant_id)
+
+    # Filter out expired policies
+    query = _filter_not_expired(query)
 
     policies = query.all()
 
@@ -273,6 +288,9 @@ async def export_domain_policies(
             raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
         query = query.filter(DomainPolicy.tenant_id == token_info.tenant_id)
 
+    # Filter out expired policies
+    query = _filter_not_expired(query)
+
     policies = query.all()
     domains = [p.domain for p in policies]
 
@@ -334,6 +352,12 @@ async def update_domain_policy(
         policy.timeout = update.timeout
     if update.read_only is not None:
         policy.read_only = update.read_only
+
+    # Handle expires_at
+    if update.clear_expires_at:
+        policy.expires_at = None
+    elif update.expires_at is not None:
+        policy.expires_at = update.expires_at
 
     # Handle credential update
     if update.clear_credential:

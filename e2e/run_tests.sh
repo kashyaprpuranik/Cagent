@@ -37,7 +37,7 @@ teardown() {
     echo ""
     echo "=== Tearing down e2e infrastructure ==="
     cd "$REPO_ROOT/data_plane" && docker compose -f docker-compose.yml -f "$SCRIPT_DIR/docker-compose.e2e.yml" \
-        --profile dev --profile managed --profile email down 2>/dev/null || true
+        --profile dev --profile managed --profile email --profile auditing down 2>/dev/null || true
     cd "$REPO_ROOT/control_plane" && docker compose down -v 2>/dev/null || true
     docker rm -f openobserve-mock echo-server 2>/dev/null || true
     docker network rm e2e-bridge 2>/dev/null || true
@@ -64,21 +64,52 @@ setup() {
     echo "Waiting for cache..."
     until docker compose exec -T cache redis-cli ping 2>/dev/null | grep -q PONG; do sleep 1; done
 
-    # 3. OpenObserve mock (accepts log ingestion POSTs)
+    # 3. OpenObserve mock (stores ingested logs, returns them on search)
     docker rm -f openobserve-mock 2>/dev/null || true
     docker run -d --name openobserve-mock \
         --network control_plane_control-net \
         python:3.11-alpine python3 -c "
+import json, re, threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import json
+
+logs = []
+lock = threading.Lock()
+
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
-        self.rfile.read(int(self.headers.get('Content-Length',0)))
+        body = self.rfile.read(int(self.headers.get('Content-Length',0)))
+        data = json.loads(body) if body else {}
+        path = self.path
+
+        # Search endpoint: /api/<org>/_search
+        if '/_search' in path:
+            sql = ''
+            if isinstance(data, dict) and 'query' in data:
+                sql = data['query'].get('sql', '')
+            with lock:
+                hits = list(logs)
+            # Apply basic WHERE filters from SQL
+            for m in re.finditer(r\"(\w+)\s*=\s*'([^']+)'\", sql):
+                k, v = m.group(1), m.group(2)
+                hits = [h for h in hits if str(h.get(k, '')) == v]
+            self._json_response({'hits': hits})
+        else:
+            # Ingest endpoint: /api/<org>/<stream>/_json
+            if isinstance(data, list):
+                with lock:
+                    logs.extend(data)
+            self._json_response({'status': 200})
+
+    def _json_response(self, obj):
+        body = json.dumps(obj).encode()
         self.send_response(200)
         self.send_header('Content-Type','application/json')
+        self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(json.dumps({'status':200}).encode())
+        self.wfile.write(body)
+
     def log_message(self,*a): pass
+
 HTTPServer(('0.0.0.0',5080),H).serve_forever()
 "
 
@@ -143,10 +174,11 @@ PYEOF
     HEARTBEAT_INTERVAL=5 \
     CONFIG_SYNC_INTERVAL=10 \
     docker compose -f docker-compose.yml -f "$SCRIPT_DIR/docker-compose.e2e.yml" \
-        --profile dev --profile managed up -d --build
+        --profile dev --profile managed --profile auditing up -d --build
 
-    # 9. Connect agent-manager to bridge
+    # 9. Connect agent-manager and log-shipper to bridge so they can reach CP
     docker network connect e2e-bridge agent-manager 2>/dev/null || true
+    docker network connect e2e-bridge log-shipper 2>/dev/null || true
 
     # 10. HTTPS echo server on DP infra-net
     docker rm -f echo-server 2>/dev/null || true
@@ -222,8 +254,10 @@ fi
 echo ""
 echo "=== Running e2e tests ==="
 cd "$SCRIPT_DIR"
+set +e
 pytest test_cp_dp_e2e.py -v "${PYTEST_ARGS[@]}"
 TEST_EXIT=$?
+set -e
 
 if [ "$TEARDOWN" = true ] && [ "$INFRA_STARTED" = true ]; then
     teardown

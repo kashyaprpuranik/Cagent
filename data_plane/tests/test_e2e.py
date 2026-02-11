@@ -40,12 +40,9 @@ def is_data_plane_running():
 
 @pytest.fixture(scope="module")
 def data_plane_running():
-    """Check if data plane is running."""
-    if not is_data_plane_running():
-        pytest.skip(
-            "Data plane not running. Start with: "
-            "cd data_plane && docker-compose up -d"
-        )
+    """Verify data plane is running (guaranteed by run_tests.sh)."""
+    assert is_data_plane_running(), \
+        "Data plane not running — run_tests.sh should have started it"
     return True
 
 
@@ -86,9 +83,8 @@ class TestAgentNetworkIsolation:
         """Agent should NOT be able to reach control plane directly."""
         # Control plane is on infra-net, agent should not reach it
         result = exec_in_agent("nc -z -w 2 10.200.2.1 8000 && echo FAIL || echo BLOCKED")
-        # This might succeed if control plane IP is different, so just log
-        if "FAIL" in result.stdout:
-            pytest.skip("Warning: Agent may be able to reach infra-net")
+        assert "BLOCKED" in result.stdout, \
+            "Agent can reach infra-net (10.200.2.1:8000) — network isolation broken!"
 
 
 @pytest.mark.e2e
@@ -269,6 +265,34 @@ class TestAgentSecurityHardening:
         assert "BLOCKED" in result.stdout, \
             "Agent can reach envoy on infra-net (10.200.2.10)"
 
+    def test_envoy_admin_not_reachable(self, data_plane_running):
+        """Envoy admin API (port 9901) must not be reachable from agent-net.
+
+        The agent has HTTP_PROXY set, so curl routes through Envoy's listener
+        on 8443 which rejects it as 'destination_not_allowed'. Even bypassing
+        the proxy, the admin binds to 127.0.0.1 so it's unreachable from
+        agent-net. Either outcome means the admin API is not exposed.
+        """
+        # Try via proxy (agent's default) — Envoy rejects unknown destinations
+        result = exec_in_agent(
+            "curl -s --connect-timeout 2 http://10.200.1.10:9901/ready "
+            "2>&1 || echo BLOCKED"
+        )
+        assert "BLOCKED" in result.stdout \
+            or "refused" in result.stdout \
+            or "destination_not_allowed" in result.stdout, \
+            "Agent can reach Envoy admin API — config_dump would leak credentials!"
+
+        # Try bypassing the proxy — admin binds to 127.0.0.1, so direct
+        # connection to 10.200.1.10:9901 should be refused
+        result = exec_in_agent(
+            "curl -s --connect-timeout 2 --noproxy '*' http://10.200.1.10:9901/ready "
+            "2>&1 || echo BLOCKED"
+        )
+        assert "BLOCKED" in result.stdout \
+            or "refused" in result.stdout, \
+            "Agent can reach Envoy admin API directly (bypassing proxy)!"
+
     def test_raw_socket_blocked(self, data_plane_running):
         """Raw sockets should be blocked (CAP_NET_RAW dropped + seccomp)."""
         # SOCK_RAW with AF_INET requires CAP_NET_RAW
@@ -342,23 +366,11 @@ def get_admin_url():
 
 @pytest.fixture(scope="module")
 def admin_url():
-    """Get local admin URL, skip if not running."""
+    """Get local admin URL (guaranteed by run_tests.sh --profile admin)."""
     url = get_admin_url()
-    if not url:
-        pytest.skip(
-            "Local admin not running. Start with: "
-            "docker-compose --profile admin up -d"
-        )
+    assert url is not None, \
+        "Local admin not running — run_tests.sh should have started it with --profile admin"
     return url
-
-
-def is_connected_mode(admin_url: str) -> bool:
-    """Check if the data plane is running in connected (read-only) mode."""
-    try:
-        r = requests.get(f"{admin_url}/api/info", timeout=5)
-        return r.json().get("mode") == "connected"
-    except Exception:
-        return False
 
 
 def is_container_running(name):
@@ -475,8 +487,6 @@ class TestLocalAdminAPI:
 
     def test_config_raw_rejects_invalid_yaml(self, admin_url):
         """PUT /api/config/raw should reject invalid YAML with 400."""
-        if is_connected_mode(admin_url):
-            pytest.skip("Config is read-only in connected mode")
         r = requests.put(
             f"{admin_url}/api/config/raw",
             json={"content": "domains:\n  - domain: good.com\n bad_indent"},
@@ -514,27 +524,22 @@ class TestLocalAdminConfigPipeline:
     all the way to the agent container's DNS resolution.
     """
 
-    # A real domain that is unlikely to be in the default allowlist
-    TEST_DOMAIN = "ifconfig.me"
+    # A real domain NOT in the default allowlist (cagent.yaml)
+    TEST_DOMAIN = "httpbin.org"
 
     def test_config_update_propagates_to_agent(self, admin_url, data_plane_running):
         """Updating config via local admin should change agent DNS behavior."""
-        if is_connected_mode(admin_url):
-            pytest.skip("Config is read-only in connected mode")
-        if not is_container_running("agent-manager"):
-            pytest.skip("agent-manager not running (needs --profile admin)")
-
         # -- Step 1: Read original config (for cleanup) --
         original = requests.get(f"{admin_url}/api/config", timeout=5)
-        if original.status_code == 404:
-            pytest.skip("No cagent.yaml configured")
+        assert original.status_code == 200, \
+            f"cagent.yaml should be configured, got {original.status_code}"
         original_raw = original.json()["raw"]
         original_config = original.json()["config"]
 
         # -- Step 2: Confirm test domain is currently blocked --
         result = exec_in_agent(f"nslookup {self.TEST_DOMAIN} 10.200.1.5")
-        if "NXDOMAIN" not in result.stdout and result.returncode == 0:
-            pytest.skip(f"{self.TEST_DOMAIN} already resolves — already in allowlist")
+        assert "NXDOMAIN" in result.stdout or result.returncode != 0, \
+            f"{self.TEST_DOMAIN} already resolves — it should not be in the default allowlist"
 
         try:
             # -- Step 3: Add test domain via local admin API --
@@ -707,3 +712,134 @@ class TestWebTerminal:
         output = self._run("curl -s --connect-timeout 2 http://8.8.8.8 || echo BLOCKED")
         assert "BLOCKED" in output or "not_allowed" in output, \
             "Agent can reach external IPs directly through terminal — isolation broken!"
+
+
+def wait_for_dp_access_log(admin_url, domain, timeout=15.0, poll=1.0):
+    """Poll DP blocked-domains endpoint until the domain appears or timeout."""
+    deadline = time.time() + timeout
+    while True:
+        r = requests.get(
+            f"{admin_url}/api/analytics/blocked-domains",
+            params={"hours": 1, "limit": 50},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            for d in r.json().get("blocked_domains", []):
+                if d["domain"] == domain:
+                    return d
+        if time.time() >= deadline:
+            return None
+        time.sleep(poll)
+
+
+@pytest.mark.e2e
+class TestAnalytics:
+    """Test analytics endpoints (requires --profile admin)."""
+
+    # Use a unique blocked domain for analytics tests
+    BLOCKED_DOMAIN = "analytics-e2e-test.example.com"
+
+    @pytest.fixture(autouse=True)
+    def _generate_blocked_traffic(self, admin_url, data_plane_running):
+        """Generate blocked (403) traffic before analytics tests."""
+        # Fire several requests to a blocked domain via the proxy
+        for _ in range(3):
+            exec_in_agent(
+                f"curl -s -o /dev/null -x http://10.200.1.10:8443 "
+                f"--connect-timeout 5 http://{self.BLOCKED_DOMAIN}/test"
+            )
+        # Give Envoy a moment to flush logs
+        time.sleep(2)
+
+    def test_blocked_domains_endpoint(self, admin_url):
+        """GET /api/analytics/blocked-domains returns blocked domain with count."""
+        entry = wait_for_dp_access_log(admin_url, self.BLOCKED_DOMAIN)
+        assert entry is not None, (
+            f"{self.BLOCKED_DOMAIN} not found in blocked domains after traffic + wait"
+        )
+        assert entry["count"] >= 1
+        assert "last_seen" in entry
+
+    def test_blocked_domains_response_shape(self, admin_url):
+        """Blocked domains response has correct top-level structure."""
+        r = requests.get(
+            f"{admin_url}/api/analytics/blocked-domains",
+            params={"hours": 1, "limit": 5},
+            timeout=10,
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "blocked_domains" in data
+        assert "window_hours" in data
+        assert data["window_hours"] == 1
+        assert isinstance(data["blocked_domains"], list)
+
+    def test_bandwidth_endpoint(self, admin_url, data_plane_running):
+        """GET /api/analytics/bandwidth returns bandwidth data."""
+        # Generate some traffic to an allowed domain (may already exist from fixture)
+        exec_in_agent(
+            "curl -s -o /dev/null -x http://10.200.1.10:8443 "
+            "http://ifconfig.me/"
+        )
+        time.sleep(2)
+
+        r = requests.get(
+            f"{admin_url}/api/analytics/bandwidth",
+            params={"hours": 1, "limit": 20},
+            timeout=10,
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "domains" in data
+        assert "window_hours" in data
+        assert isinstance(data["domains"], list)
+        # At least one domain should have traffic (our blocked domain)
+        if data["domains"]:
+            entry = data["domains"][0]
+            assert "domain" in entry
+            assert "bytes_sent" in entry
+            assert "bytes_received" in entry
+            assert "total_bytes" in entry
+            assert "request_count" in entry
+            assert entry["request_count"] >= 1
+
+    def test_timeseries_endpoint(self, admin_url):
+        """GET /api/analytics/blocked-domains/timeseries returns bucketed data."""
+        r = requests.get(
+            f"{admin_url}/api/analytics/blocked-domains/timeseries",
+            params={"hours": 1, "buckets": 6},
+            timeout=10,
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "buckets" in data
+        assert "window_hours" in data
+        assert "bucket_minutes" in data
+        assert len(data["buckets"]) == 6
+        # Each bucket should have start, end, count
+        for bucket in data["buckets"]:
+            assert "start" in bucket
+            assert "end" in bucket
+            assert "count" in bucket
+            assert isinstance(bucket["count"], int)
+        # At least one bucket should have blocked requests from our fixture
+        total = sum(b["count"] for b in data["buckets"])
+        assert total >= 1, "No blocked requests in any timeseries bucket"
+
+    def test_diagnose_endpoint(self, admin_url):
+        """GET /api/analytics/diagnose returns diagnostic for a blocked domain."""
+        r = requests.get(
+            f"{admin_url}/api/analytics/diagnose",
+            params={"domain": self.BLOCKED_DOMAIN},
+            timeout=10,
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["domain"] == self.BLOCKED_DOMAIN
+        assert data["in_allowlist"] is False
+        assert "dns_result" in data
+        assert "recent_requests" in data
+        assert "diagnosis" in data
+        assert "not in the allowlist" in data["diagnosis"]
+        # DNS should block this domain
+        assert data["dns_result"] in ("NXDOMAIN", "unknown")

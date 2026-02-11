@@ -149,6 +149,9 @@ class DomainPolicyCreate(BaseModel):
     timeout: Optional[str] = None  # e.g., "30s", "120s", "5m"
     read_only: Optional[bool] = None  # Block POST/PUT/DELETE
 
+    # Temporary allowlist
+    expires_at: Optional[datetime] = None  # Auto-expire after this time
+
     # Credential (optional)
     credential: Optional[DomainPolicyCredential] = None
 
@@ -164,6 +167,8 @@ class DomainPolicyUpdate(BaseModel):
     bytes_per_hour: Optional[int] = None
     timeout: Optional[str] = None
     read_only: Optional[bool] = None
+    expires_at: Optional[datetime] = None
+    clear_expires_at: Optional[bool] = None  # Set to true to remove expiry
     credential: Optional[DomainPolicyCredential] = None
     clear_credential: Optional[bool] = None  # Set to true to remove credential
 
@@ -183,6 +188,7 @@ class DomainPolicyResponse(BaseModel):
     bytes_per_hour: Optional[int]
     timeout: Optional[str]
     read_only: Optional[bool]
+    expires_at: Optional[datetime]
     has_credential: bool  # True if credential configured
     credential_header: Optional[str]
     credential_format: Optional[str]

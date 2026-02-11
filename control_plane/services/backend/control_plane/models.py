@@ -91,6 +91,9 @@ class DomainPolicy(Base):
     timeout = Column(String(20))  # e.g., "30s", "120s", "5m"
     read_only = Column(Boolean, default=False)  # Block POST/PUT/DELETE
 
+    # Temporary allowlist: auto-expire after this timestamp
+    expires_at = Column(DateTime, nullable=True, index=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

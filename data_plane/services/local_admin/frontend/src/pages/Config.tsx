@@ -784,6 +784,31 @@ export default function ConfigPage() {
     }
   }, [searchParams, isReadOnly, setSearchParams]);
 
+  // Handle add-domains (plural) URL param from bulk allowlist
+  useEffect(() => {
+    const addDomains = searchParams.get('add-domains');
+    if (addDomains && !isReadOnly && config.domains !== undefined) {
+      const newDomains = addDomains.split(',').map(decodeURIComponent).filter(Boolean);
+      const existingDomainNames = (config.domains || []).map((d) => d.domain);
+      const toAdd = newDomains.filter((d) => !existingDomainNames.includes(d));
+      if (toAdd.length > 0) {
+        const entries = toAdd.map((domain) => ({ domain }));
+        setConfig({
+          ...config,
+          domains: [...(config.domains || []), ...entries],
+        });
+        setHasChanges(true);
+        setActiveTab('domains');
+        setSaveMessage({
+          type: 'success',
+          text: `Added ${toAdd.length} domain${toAdd.length > 1 ? 's' : ''} to config. Click Save to persist.`,
+        });
+      }
+      searchParams.delete('add-domains');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, isReadOnly, config.domains, setSearchParams]);
+
   const saveMutation = useMutation({
     mutationFn: updateConfigRaw,
     onSuccess: () => {

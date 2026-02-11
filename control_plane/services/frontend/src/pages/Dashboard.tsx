@@ -13,7 +13,8 @@ import {
   X,
   Terminal,
 } from 'lucide-react';
-import { Card, Badge, Button, Modal, BlockedDomainsWidget } from '@cagent/shared-ui';
+import { Card, Badge, Button, Modal, BlockedDomainsWidget, BlockedTimeseriesChart, BandwidthWidget, DiagnoseModal } from '@cagent/shared-ui';
+import type { DiagnoseResult } from '@cagent/shared-ui';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
 import {
@@ -25,9 +26,12 @@ import {
   useStopAgent,
   useStartAgent,
   useBlockedDomains,
+  useBlockedTimeseries,
+  useBandwidth,
   useDomainPolicies,
   useCreateDomainPolicy,
 } from '../hooks/useApi';
+import { api } from '../api/client';
 
 export function Dashboard() {
   const { user } = useAuth();
@@ -52,6 +56,8 @@ export function Dashboard() {
   const startAgent = useStartAgent();
 
   const { data: blockedData, isLoading: blockedLoading } = useBlockedDomains(selectedAgentId);
+  const { data: timeseriesData, isLoading: timeseriesLoading } = useBlockedTimeseries(selectedAgentId);
+  const { data: bandwidthData, isLoading: bandwidthLoading } = useBandwidth(selectedAgentId);
   const { data: domainPolicies } = useDomainPolicies({ tenantId: selectedTenantId });
   const createDomainPolicy = useCreateDomainPolicy();
 
@@ -64,6 +70,11 @@ export function Dashboard() {
   const [wipeWorkspace, setWipeWorkspace] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // Diagnose modal state
+  const [diagnosingDomain, setDiagnosingDomain] = useState<string | null>(null);
+  const [diagnoseResult, setDiagnoseResult] = useState<DiagnoseResult | null>(null);
+  const [diagnoseLoading, setDiagnoseLoading] = useState(false);
 
   // Reset selected agent when tenant changes
   useEffect(() => {
@@ -118,6 +129,70 @@ export function Dashboard() {
       await startAgent.mutateAsync(selectedAgentId);
     } catch (e) {
       setError(`Start failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleAddDomain = async (domain: string) => {
+    setSuccess(null);
+    try {
+      await createDomainPolicy.mutateAsync({
+        data: { domain },
+        tenantId: selectedTenantId ?? undefined,
+      });
+      setSuccess(`Added "${domain}" to allowlist. Go to Domain Policies to customize rules further.`);
+    } catch (e) {
+      setError(`Failed to add domain policy: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleBulkAdd = async (domains: string[]) => {
+    setSuccess(null);
+    setError(null);
+    const results = await Promise.allSettled(
+      domains.map((domain) =>
+        createDomainPolicy.mutateAsync({
+          data: { domain },
+          tenantId: selectedTenantId ?? undefined,
+        })
+      )
+    );
+    const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    if (failed > 0) {
+      setError(`Added ${succeeded} of ${domains.length} domains (${failed} failed)`);
+    } else {
+      setSuccess(`Added ${succeeded} of ${domains.length} domains to allowlist.`);
+    }
+  };
+
+  const handleAddWithTTL = async (domain: string, ttlHours: number) => {
+    setSuccess(null);
+    try {
+      const expiresAt = new Date(Date.now() + ttlHours * 3600000).toISOString();
+      await createDomainPolicy.mutateAsync({
+        data: { domain, expires_at: expiresAt },
+        tenantId: selectedTenantId ?? undefined,
+      });
+      setSuccess(`Added "${domain}" to allowlist (expires in ${ttlHours}h).`);
+    } catch (e) {
+      setError(`Failed to add domain policy: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleDiagnose = async (domain: string) => {
+    setDiagnosingDomain(domain);
+    setDiagnoseResult(null);
+    setDiagnoseLoading(true);
+    try {
+      const result = await api.getDiagnosis({
+        domain,
+        agentId: selectedAgentId ?? undefined,
+      });
+      setDiagnoseResult(result);
+    } catch {
+      setDiagnoseResult(null);
+    } finally {
+      setDiagnoseLoading(false);
     }
   };
 
@@ -406,26 +481,45 @@ export function Dashboard() {
         </Card>
       )}
 
-      {/* Blocked Domains Widget */}
+      {/* Analytics Widgets */}
       {selectedAgentId && (
-        <BlockedDomainsWidget
-          domains={blockedData?.blocked_domains || []}
-          allowlisted={allowlisted}
-          onAdd={async (domain) => {
-            setSuccess(null);
-            try {
-              await createDomainPolicy.mutateAsync({
-                data: { domain },
-                tenantId: selectedTenantId ?? undefined,
-              });
-              setSuccess(`Added "${domain}" to allowlist. Go to Domain Policies to customize rules further.`);
-            } catch (e) {
-              setError(`Failed to add domain policy: ${e instanceof Error ? e.message : 'Unknown error'}`);
-            }
-          }}
-          isLoading={blockedLoading}
-          readOnly={!hasAdminRole}
-          windowHours={blockedData?.window_hours}
+        <>
+          {/* Timeseries Chart */}
+          <BlockedTimeseriesChart
+            buckets={timeseriesData?.buckets || []}
+            isLoading={timeseriesLoading}
+          />
+
+          {/* Blocked Domains Widget */}
+          <BlockedDomainsWidget
+            domains={blockedData?.blocked_domains || []}
+            allowlisted={allowlisted}
+            onAdd={handleAddDomain}
+            onBulkAdd={hasAdminRole ? handleBulkAdd : undefined}
+            onAddWithTTL={hasAdminRole ? handleAddWithTTL : undefined}
+            onDiagnose={handleDiagnose}
+            isLoading={blockedLoading}
+            readOnly={!hasAdminRole}
+            windowHours={blockedData?.window_hours}
+          />
+
+          {/* Bandwidth Widget */}
+          <BandwidthWidget
+            domains={bandwidthData?.domains || []}
+            isLoading={bandwidthLoading}
+            windowHours={bandwidthData?.window_hours}
+          />
+        </>
+      )}
+
+      {/* Diagnose Modal */}
+      {diagnosingDomain && (
+        <DiagnoseModal
+          domain={diagnosingDomain}
+          result={diagnoseResult}
+          isLoading={diagnoseLoading}
+          onClose={() => setDiagnosingDomain(null)}
+          onAdd={hasAdminRole ? handleAddDomain : undefined}
         />
       )}
 

@@ -82,7 +82,7 @@ def seed_test_data(db: Session):
             "name": "admin-token",
             "raw_token": "admin-test-token-do-not-use-in-production",
             "token_type": "admin",
-            "roles": "admin",
+            "roles": "admin,developer",
             "is_super_admin": False,
             "tenant_id": default_tenant_id,
         },

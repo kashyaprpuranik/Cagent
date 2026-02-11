@@ -197,6 +197,57 @@ export interface BlockedDomainsResponse {
 export const getBlockedDomains = (hours?: number) =>
   request<BlockedDomainsResponse>(`/analytics/blocked-domains?hours=${hours || 1}`);
 
+export interface TimeseriesBucket {
+  start: string;
+  end: string;
+  count: number;
+}
+
+export interface TimeseriesResponse {
+  buckets: TimeseriesBucket[];
+  window_hours: number;
+  bucket_minutes: number;
+}
+
+export const getBlockedTimeseries = (hours?: number, buckets?: number) =>
+  request<TimeseriesResponse>(`/analytics/blocked-domains/timeseries?hours=${hours || 1}&buckets=${buckets || 12}`);
+
+export interface BandwidthEntry {
+  domain: string;
+  bytes_sent: number;
+  bytes_received: number;
+  total_bytes: number;
+  request_count: number;
+}
+
+export interface BandwidthResponse {
+  domains: BandwidthEntry[];
+  window_hours: number;
+}
+
+export const getBandwidth = (hours?: number) =>
+  request<BandwidthResponse>(`/analytics/bandwidth?hours=${hours || 1}`);
+
+export interface DiagnoseRequest {
+  timestamp: string;
+  method: string;
+  path: string;
+  response_code: number;
+  response_flags: string;
+  duration_ms: number;
+}
+
+export interface DiagnoseResponse {
+  domain: string;
+  in_allowlist: boolean;
+  dns_result?: string;
+  recent_requests: DiagnoseRequest[];
+  diagnosis: string;
+}
+
+export const getDiagnosis = (domain: string) =>
+  request<DiagnoseResponse>(`/analytics/diagnose?domain=${encodeURIComponent(domain)}`);
+
 export const getSshTunnelStatus = () => request<SshTunnelStatus>('/ssh-tunnel');
 
 export const generateStcpKey = () =>

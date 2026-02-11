@@ -427,6 +427,52 @@ export const api = {
     return handleResponse(response);
   },
 
+  getBlockedTimeseries: async (params?: {
+    agentId?: string;
+    tenantId?: number;
+    hours?: number;
+    buckets?: number;
+  }): Promise<{ buckets: { start: string; end: string; count: number }[]; window_hours: number; bucket_minutes: number }> => {
+    const searchParams = new URLSearchParams();
+    if (params?.agentId) searchParams.append('agent_id', params.agentId);
+    if (params?.tenantId !== undefined) searchParams.append('tenant_id', String(params.tenantId));
+    if (params?.hours) searchParams.append('hours', String(params.hours));
+    if (params?.buckets) searchParams.append('buckets', String(params.buckets));
+    const queryString = searchParams.toString();
+    const url = queryString ? `${API_BASE}/analytics/blocked-domains/timeseries?${queryString}` : `${API_BASE}/analytics/blocked-domains/timeseries`;
+    const response = await fetch(url, { headers: getAuthHeaders() });
+    return handleResponse(response);
+  },
+
+  getBandwidth: async (params?: {
+    agentId?: string;
+    tenantId?: number;
+    hours?: number;
+  }): Promise<{ domains: { domain: string; bytes_sent: number; bytes_received: number; total_bytes: number; request_count: number }[]; window_hours: number }> => {
+    const searchParams = new URLSearchParams();
+    if (params?.agentId) searchParams.append('agent_id', params.agentId);
+    if (params?.tenantId !== undefined) searchParams.append('tenant_id', String(params.tenantId));
+    if (params?.hours) searchParams.append('hours', String(params.hours));
+    const queryString = searchParams.toString();
+    const url = queryString ? `${API_BASE}/analytics/bandwidth?${queryString}` : `${API_BASE}/analytics/bandwidth`;
+    const response = await fetch(url, { headers: getAuthHeaders() });
+    return handleResponse(response);
+  },
+
+  getDiagnosis: async (params: {
+    domain: string;
+    agentId?: string;
+    tenantId?: number;
+  }): Promise<{ domain: string; in_allowlist: boolean; dns_result?: string; recent_requests: { timestamp: string; method: string; path: string; response_code: number; response_flags: string; duration_ms: number }[]; diagnosis: string }> => {
+    const searchParams = new URLSearchParams();
+    searchParams.append('domain', params.domain);
+    if (params.agentId) searchParams.append('agent_id', params.agentId);
+    if (params.tenantId !== undefined) searchParams.append('tenant_id', String(params.tenantId));
+    const url = `${API_BASE}/analytics/diagnose?${searchParams}`;
+    const response = await fetch(url, { headers: getAuthHeaders() });
+    return handleResponse(response);
+  },
+
   rotateDomainPolicyCredential: async (id: number, credential: DomainPolicyCredential): Promise<DomainPolicy> => {
     const response = await fetch(`${API_BASE}/domain-policies/${id}/rotate-credential`, {
       method: 'POST',

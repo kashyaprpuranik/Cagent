@@ -150,6 +150,17 @@ with engine.connect() as conn:
         conn.execute(text('CREATE UNIQUE INDEX uq_domain_policy_tenant ON domain_policies(domain, agent_id, tenant_id)'))
         conn.commit()
 
+    # Add expires_at column to domain_policies if missing
+    result = conn.execute(text(\"\"\"
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'domain_policies' AND column_name = 'expires_at'
+    \"\"\"))
+    if not result.fetchone():
+        print('Adding expires_at column to domain_policies...')
+        conn.execute(text('ALTER TABLE domain_policies ADD COLUMN expires_at TIMESTAMP'))
+        conn.execute(text('CREATE INDEX ix_domain_policies_expires_at ON domain_policies(expires_at)'))
+        conn.commit()
+
     # Add tenant_id column to domain_policies if missing
     result = conn.execute(text(\"\"\"
         SELECT column_name FROM information_schema.columns

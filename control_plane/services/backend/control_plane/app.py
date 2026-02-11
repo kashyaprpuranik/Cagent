@@ -11,7 +11,7 @@ from control_plane.models import (  # noqa: F401 - ensure models are registered
     Tenant, TenantIpAcl, AuditTrail, DomainPolicy, EmailPolicy,
     AgentState, TerminalSession, ApiToken, WebSocketTicket,
 )
-from control_plane.routes import health, logs, domain_policies, email_policies, agents, terminal, tenants, ip_acls, tokens
+from control_plane.routes import health, logs, domain_policies, email_policies, agents, terminal, tenants, ip_acls, tokens, analytics
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -50,3 +50,4 @@ app.include_router(terminal.router)
 app.include_router(tenants.router)
 app.include_router(ip_acls.router)
 app.include_router(tokens.router)
+app.include_router(analytics.router)

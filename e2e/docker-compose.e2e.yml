@@ -1,8 +1,18 @@
 # Docker Compose override for e2e tests.
 # Passes E2E_ECHO_CREDENTIAL to agent-manager so the config generator
 # can bake the test credential into the Envoy Lua filter.
+#
+# Overrides the cagent.yaml bind mount with a patched copy (.cagent.e2e.yaml)
+# that includes the echo-server domain.  This avoids modifying the tracked
+# config file, which VS Code's YAML extension would immediately reformat.
 
 services:
   agent-manager:
     environment:
       - E2E_ECHO_CREDENTIAL=${E2E_ECHO_CREDENTIAL:-}
+    volumes:
+      - ${E2E_CAGENT_YAML:-../data_plane/configs/cagent.yaml}:/etc/cagent/cagent.yaml:ro
+
+  local-admin:
+    volumes:
+      - ${E2E_CAGENT_YAML:-../data_plane/configs/cagent.yaml}:/etc/cagent/cagent.yaml

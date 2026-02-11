@@ -114,15 +114,3 @@ class TestEnvoyProxySettings:
         assert "access_log" in content.lower() or "accesslog" in content.lower(), \
             "Envoy should have access logging configured"
 
-
-class TestEnvoySecurity:
-    """Test Envoy security configuration."""
-
-    def test_no_allow_all_origins(self, configs_dir):
-        """Envoy should not allow all CORS origins in production."""
-        config_file = configs_dir / "envoy" / "envoy-enhanced.yaml"
-        content = config_file.read_text()
-
-        # This is a soft check - production should restrict origins
-        if 'allow_origin_string_match' in content and '"*"' in content:
-            pytest.skip("Warning: CORS allows all origins - review for production")

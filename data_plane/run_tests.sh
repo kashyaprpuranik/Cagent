@@ -52,7 +52,7 @@ if [ "$E2E" = true ]; then
     AGENT_SERVICE=$(docker inspect agent --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
     if [ "$AGENT_SERVICE" = "agent" ]; then
         echo "Agent is running with standard profile (gVisor), tearing down to restart with dev profile..."
-        docker compose --profile standard --profile admin --profile email down 2>/dev/null || true
+        docker compose --profile standard --profile admin --profile email --profile auditing down 2>/dev/null || true
         NEED_RESTART=true
     elif [ -z "$AGENT_SERVICE" ]; then
         NEED_RESTART=true
@@ -60,7 +60,7 @@ if [ "$E2E" = true ]; then
 
     # Check local-admin and agent-manager are running (admin profile)
     if [ "$NEED_RESTART" = false ]; then
-        for svc in local-admin agent-manager; do
+        for svc in local-admin agent-manager log-shipper; do
             if ! docker ps --filter "name=^${svc}$" --format "{{.Names}}" 2>/dev/null | grep -q "$svc"; then
                 NEED_RESTART=true
                 break
@@ -73,14 +73,26 @@ if [ "$E2E" = true ]; then
         ADMIN_MODE=$(curl -sf http://localhost:8081/api/info 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('mode',''))" 2>/dev/null || true)
         if [ "$ADMIN_MODE" = "connected" ]; then
             echo "Data plane is running in connected mode, restarting in standalone mode..."
-            docker compose --profile dev --profile admin --profile email down 2>/dev/null || true
+            docker compose --profile dev --profile admin --profile email --profile auditing down 2>/dev/null || true
             NEED_RESTART=true
         fi
     fi
 
     if [ "$NEED_RESTART" = true ]; then
-        echo "Starting data plane (standalone, --profile dev --profile admin)..."
-        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin up -d
+        echo "Stopping any existing containers first..."
+        docker compose --profile dev --profile admin --profile email --profile auditing down 2>/dev/null || true
+        docker compose --profile standard --profile admin --profile email --profile auditing down 2>/dev/null || true
+        # Remove orphan containers (e.g. echo-server from e2e tests) that may hold network IPs
+        for net in data_plane_infra-net data_plane_agent-net; do
+            for cid in $(docker network inspect "$net" --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do
+                echo "  Removing orphan container $cid from $net..."
+                docker stop "$cid" 2>/dev/null || true
+                docker rm "$cid" 2>/dev/null || true
+            done
+            docker network rm "$net" 2>/dev/null || true
+        done
+        echo "Starting data plane (standalone, --profile dev --profile admin --profile auditing)..."
+        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d
         CONTAINERS_STARTED=true
         echo "Waiting for containers to stabilize..."
         sleep 5
@@ -95,7 +107,7 @@ if [ "$E2E" = true ]; then
     if [ "$CONTAINERS_STARTED" = true ]; then
         echo ""
         echo "Stopping containers started by this script..."
-        docker compose --profile dev --profile admin --profile email down
+        docker compose --profile dev --profile admin --profile email --profile auditing down 2>/dev/null || true
     fi
 
     exit $E2E_EXIT

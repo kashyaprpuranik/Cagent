@@ -182,6 +182,21 @@ export interface SshConnectInfo {
   visitor_config: string;
 }
 
+// Analytics
+export interface BlockedDomainEntry {
+  domain: string;
+  count: number;
+  last_seen: string;
+}
+
+export interface BlockedDomainsResponse {
+  blocked_domains: BlockedDomainEntry[];
+  window_hours: number;
+}
+
+export const getBlockedDomains = (hours?: number) =>
+  request<BlockedDomainsResponse>(`/analytics/blocked-domains?hours=${hours || 1}`);
+
 export const getSshTunnelStatus = () => request<SshTunnelStatus>('/ssh-tunnel');
 
 export const generateStcpKey = () =>

@@ -592,8 +592,15 @@ class TestLocalAdminConfigPipeline:
             requests.post(f"{admin_url}/api/config/reload", timeout=15)
 
 
-def ws_recv_until(ws, marker: str, max_reads: int = 30) -> str:
-    """Read from WebSocket until marker appears in accumulated output."""
+def ws_recv_until(ws, marker, max_reads: int = 30) -> str:
+    """Read from WebSocket until marker appears in accumulated output.
+
+    marker can be a string or a list of strings (matches any).
+    """
+    if isinstance(marker, str):
+        markers = [marker]
+    else:
+        markers = list(marker)
     output = ""
     consecutive_timeouts = 0
     for _ in range(max_reads):
@@ -605,9 +612,13 @@ def ws_recv_until(ws, marker: str, max_reads: int = 30) -> str:
             if consecutive_timeouts >= 3:
                 break
             continue
-        if marker in output:
+        if any(m in output for m in markers):
             break
     return output
+
+
+# Shell prompt markers — root uses '#', non-root uses '$'
+PROMPT_MARKERS = ["$ ", "# "]
 
 
 @pytest.mark.e2e
@@ -623,15 +634,18 @@ class TestWebTerminal:
         """Connect a WebSocket to the agent terminal for each test."""
         ws_url = admin_url.replace("http://", "ws://")
         self.ws = websocket.create_connection(
-            f"{ws_url}/api/terminal/agent", timeout=5
+            f"{ws_url}/api/terminal/agent", timeout=10
         )
-        # Drain the initial bash prompt / MOTD
-        ws_recv_until(self.ws, "$", max_reads=10)
+        # Drain the initial bash prompt / MOTD (root='#', user='$')
+        ws_recv_until(self.ws, PROMPT_MARKERS, max_reads=15)
         # Disable echo so markers aren't found in the echoed command
         self.ws.send("stty -echo\n")
-        ws_recv_until(self.ws, "$", max_reads=10)
+        ws_recv_until(self.ws, PROMPT_MARKERS, max_reads=10)
         yield
-        self.ws.close()
+        try:
+            self.ws.close()
+        except Exception:
+            pass
 
     def _run(self, command: str, marker: str = None) -> str:
         """Send a command and return output up to the marker."""

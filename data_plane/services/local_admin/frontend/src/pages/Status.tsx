@@ -1,4 +1,6 @@
+import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import {
   RefreshCw,
   Play,
@@ -15,10 +17,14 @@ import {
   Shield,
   Mail,
 } from 'lucide-react';
+import { BlockedDomainsWidget } from '@cagent/shared-ui';
 import {
   getContainers,
   controlContainer,
   getDetailedHealth,
+  getBlockedDomains,
+  getConfig,
+  getInfo,
   ContainerInfo,
   HealthCheck,
 } from '../api/client';
@@ -236,11 +242,35 @@ function ContainerCard({ container }: { container: ContainerInfo }) {
 }
 
 export default function StatusPage() {
+  const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['containers'],
     queryFn: getContainers,
     refetchInterval: 5000,
   });
+
+  const { data: blockedData, isLoading: blockedLoading } = useQuery({
+    queryKey: ['blocked-domains'],
+    queryFn: () => getBlockedDomains(),
+    refetchInterval: 30_000,
+  });
+
+  const { data: configData } = useQuery({
+    queryKey: ['config'],
+    queryFn: getConfig,
+  });
+
+  const { data: infoData } = useQuery({
+    queryKey: ['info'],
+    queryFn: getInfo,
+  });
+
+  const allowlisted = useMemo(() => {
+    const domains = configData?.config?.domains?.map((d) => d.domain) || [];
+    return new Set(domains);
+  }, [configData]);
+
+  const isConnected = infoData?.mode === 'connected';
 
   return (
     <div className="space-y-6">
@@ -257,6 +287,16 @@ export default function StatusPage() {
 
       {/* Health Panel */}
       <HealthPanel />
+
+      {/* Blocked Domains Widget */}
+      <BlockedDomainsWidget
+        domains={blockedData?.blocked_domains || []}
+        allowlisted={allowlisted}
+        onAdd={(domain) => navigate(`/config?add-domain=${encodeURIComponent(domain)}`)}
+        isLoading={blockedLoading}
+        readOnly={isConnected}
+        windowHours={blockedData?.window_hours}
+      />
 
       {/* Containers */}
       <div>

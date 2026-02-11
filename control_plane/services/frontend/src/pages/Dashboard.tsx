@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Server,
@@ -9,10 +9,11 @@ import {
   ChevronDown,
   Circle,
   AlertCircle,
+  CheckCircle,
   X,
   Terminal,
 } from 'lucide-react';
-import { Card, Badge, Button, Modal } from '@cagent/shared-ui';
+import { Card, Badge, Button, Modal, BlockedDomainsWidget } from '@cagent/shared-ui';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
 import {
@@ -23,6 +24,9 @@ import {
   useRestartAgent,
   useStopAgent,
   useStartAgent,
+  useBlockedDomains,
+  useDomainPolicies,
+  useCreateDomainPolicy,
 } from '../hooks/useApi';
 
 export function Dashboard() {
@@ -47,9 +51,19 @@ export function Dashboard() {
   const stopAgent = useStopAgent();
   const startAgent = useStartAgent();
 
+  const { data: blockedData, isLoading: blockedLoading } = useBlockedDomains(selectedAgentId);
+  const { data: domainPolicies } = useDomainPolicies({ tenantId: selectedTenantId });
+  const createDomainPolicy = useCreateDomainPolicy();
+
+  const allowlisted = useMemo(() => {
+    const domains = domainPolicies?.map((p) => p.domain) || [];
+    return new Set(domains);
+  }, [domainPolicies]);
+
   const [wipeModal, setWipeModal] = useState(false);
   const [wipeWorkspace, setWipeWorkspace] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   // Reset selected agent when tenant changes
   useEffect(() => {
@@ -133,6 +147,25 @@ export function Dashboard() {
           <AlertCircle size={20} className="flex-shrink-0" />
           <span className="flex-1">{error}</span>
           <button onClick={() => setError(null)} className="text-red-400 hover:text-red-200">
+            <X size={18} />
+          </button>
+        </div>
+      )}
+
+      {/* Success Toast */}
+      {success && (
+        <div className="flex items-center gap-3 p-4 bg-green-900/50 border border-green-700 rounded-lg text-green-200">
+          <CheckCircle size={20} className="flex-shrink-0" />
+          <span className="flex-1">
+            {success}{' '}
+            <button
+              onClick={() => { setSuccess(null); navigate('/domain-policies'); }}
+              className="underline text-green-300 hover:text-green-100"
+            >
+              Go to Domain Policies
+            </button>
+          </span>
+          <button onClick={() => setSuccess(null)} className="text-green-400 hover:text-green-200">
             <X size={18} />
           </button>
         </div>
@@ -371,6 +404,29 @@ export function Dashboard() {
             <p className="text-sm mt-2">Data planes will appear here when they connect to the control plane</p>
           </div>
         </Card>
+      )}
+
+      {/* Blocked Domains Widget */}
+      {selectedAgentId && (
+        <BlockedDomainsWidget
+          domains={blockedData?.blocked_domains || []}
+          allowlisted={allowlisted}
+          onAdd={async (domain) => {
+            setSuccess(null);
+            try {
+              await createDomainPolicy.mutateAsync({
+                data: { domain },
+                tenantId: selectedTenantId ?? undefined,
+              });
+              setSuccess(`Added "${domain}" to allowlist. Go to Domain Policies to customize rules further.`);
+            } catch (e) {
+              setError(`Failed to add domain policy: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            }
+          }}
+          isLoading={blockedLoading}
+          readOnly={!hasAdminRole}
+          windowHours={blockedData?.window_hours}
+        />
       )}
 
       {/* Wipe Confirmation Modal */}

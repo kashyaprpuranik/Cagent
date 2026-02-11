@@ -22,6 +22,7 @@ function Sidebar() {
   });
 
   const isConnected = info?.mode === 'connected';
+  const sshTunnelEnabled = info?.features?.includes('ssh-tunnel');
 
   const navItems: NavItem[] = [
     { to: '/', icon: Activity, label: 'Status' },
@@ -29,7 +30,7 @@ function Sidebar() {
     ...(!isConnected ? [{ to: '/config', icon: Settings, label: 'Config' }] : []),
     { to: '/logs', icon: FileText, label: 'Logs' },
     { to: '/terminal', icon: MonitorUp, label: 'Terminal' },
-    { to: '/ssh-tunnel', icon: Terminal, label: 'SSH Tunnel', badge: 'Beta' },
+    ...(sshTunnelEnabled ? [{ to: '/ssh-tunnel', icon: Terminal, label: 'SSH Tunnel', badge: 'Beta' }] : []),
   ];
 
   return (
@@ -96,6 +97,7 @@ export default function App() {
   });
 
   const isConnected = info?.mode === 'connected';
+  const sshTunnelEnabled = info?.features?.includes('ssh-tunnel');
 
   return (
     <Layout>
@@ -105,7 +107,7 @@ export default function App() {
         <Route path="/config" element={isConnected ? <Navigate to="/" replace /> : <ConfigPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/terminal" element={<TerminalPage />} />
-        <Route path="/ssh-tunnel" element={<SshTunnelPage />} />
+        <Route path="/ssh-tunnel" element={sshTunnelEnabled ? <SshTunnelPage /> : <Navigate to="/" replace />} />
       </Routes>
     </Layout>
   );

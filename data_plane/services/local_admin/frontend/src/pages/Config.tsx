@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Save,
@@ -742,6 +743,7 @@ function SettingsEditor({
 
 export default function ConfigPage() {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>('domains');
   const [rawContent, setRawContent] = useState('');
   const [config, setConfig] = useState<Config>({});
@@ -769,6 +771,18 @@ export default function ConfigPage() {
       setHasChanges(false);
     }
   }, [data]);
+
+  // Handle add-domain URL param from BlockedDomainsWidget
+  useEffect(() => {
+    const addDomain = searchParams.get('add-domain');
+    if (addDomain && !isReadOnly) {
+      setEditingDomain({ domain: addDomain });
+      setShowDomainModal(true);
+      setActiveTab('domains');
+      searchParams.delete('add-domain');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, isReadOnly, setSearchParams]);
 
   const saveMutation = useMutation({
     mutationFn: updateConfigRaw,
@@ -893,7 +907,7 @@ export default function ConfigPage() {
   };
 
   const handleAddDomain = (domain: DomainEntry) => {
-    if (editingDomain) {
+    if (editingDomain && config.domains?.some((d) => d.domain === editingDomain.domain)) {
       // Update existing
       setConfig({
         ...config,

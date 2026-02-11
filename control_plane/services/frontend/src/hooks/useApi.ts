@@ -221,6 +221,19 @@ export function useDeleteTenantIpAcl() {
   });
 }
 
+// Analytics
+export function useBlockedDomains(agentId?: string | null, hours?: number) {
+  return useQuery({
+    queryKey: ['blockedDomains', agentId, hours],
+    queryFn: () => api.getBlockedDomains({
+      agentId: agentId ?? undefined,
+      hours: hours ?? 1,
+    }),
+    refetchInterval: 30_000,
+    enabled: !!agentId,
+  });
+}
+
 // Egress Policies (API route: /domain-policies)
 export function useDomainPolicies(params?: { agentId?: string; tenantId?: number | null }) {
   return useQuery({

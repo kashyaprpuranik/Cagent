@@ -13,7 +13,7 @@ from control_plane.config import (
     LOG_QUERY_TIMEOUT, LOG_QUERY_MAX_RESULTS, LOG_QUERY_MAX_TIME_RANGE_DAYS,
     logger,
 )
-from control_plane.database import get_db
+from control_plane.database import get_db, SessionLocal
 from control_plane.models import AgentState, AuditTrail, Tenant
 from control_plane.schemas import LogBatch, AuditTrailResponse
 from control_plane.auth import TokenInfo, verify_token, require_admin_role, require_developer_role
@@ -54,7 +54,6 @@ async def ingest_logs(
     request: Request,
     batch: LogBatch = Depends(_parse_log_batch),
     token_info: TokenInfo = Depends(verify_token),
-    db: Session = Depends(get_db)
 ):
     """Ingest logs from data plane agents.
 
@@ -93,30 +92,36 @@ async def ingest_logs(
             detail=f"Payload too large: {content_length} bytes exceeds maximum of {LOG_INGEST_MAX_PAYLOAD_BYTES}"
         )
 
-    # Get tenant_id from agent state (trusted source, not from request)
-    agent = db.query(AgentState).filter(
-        AgentState.agent_id == token_info.agent_id,
-        AgentState.deleted_at.is_(None)
-    ).first()
-
-    if not agent:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Agent {token_info.agent_id} not found"
-        )
-
-    tenant_id = agent.tenant_id
-
-    # Look up tenant for multi-tenant routing
-    tenant = None
-    tenant_settings = None
-    if OPENOBSERVE_MULTI_TENANT:
-        tenant = db.query(Tenant).filter(
-            Tenant.id == tenant_id,
-            Tenant.deleted_at.is_(None)
+    # DB lookups — release connection before the slow HTTP call to OpenObserve
+    db = SessionLocal()
+    try:
+        agent = db.query(AgentState).filter(
+            AgentState.agent_id == token_info.agent_id,
+            AgentState.deleted_at.is_(None)
         ).first()
-        if tenant:
-            tenant_settings = get_tenant_settings(tenant)
+
+        if not agent:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent {token_info.agent_id} not found"
+            )
+
+        tenant_id = agent.tenant_id
+
+        # Look up tenant for multi-tenant routing
+        tenant = None
+        tenant_settings = None
+        tenant_slug = None
+        if OPENOBSERVE_MULTI_TENANT:
+            tenant = db.query(Tenant).filter(
+                Tenant.id == tenant_id,
+                Tenant.deleted_at.is_(None)
+            ).first()
+            if tenant:
+                tenant_settings = get_tenant_settings(tenant)
+                tenant_slug = tenant.slug
+    finally:
+        db.close()
 
     # Log age cutoff
     age_cutoff = datetime.now(timezone.utc) - timedelta(hours=LOG_INGEST_MAX_AGE_HOURS)
@@ -154,9 +159,9 @@ async def ingest_logs(
     # --- Forward to OpenObserve ---
 
     try:
-        if OPENOBSERVE_MULTI_TENANT and tenant:
+        if OPENOBSERVE_MULTI_TENANT and tenant_slug:
             auth = get_ingest_auth(tenant_settings)
-            url = get_ingest_url(tenant.slug)
+            url = get_ingest_url(tenant_slug)
 
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -166,7 +171,7 @@ async def ingest_logs(
                     timeout=LOG_INGEST_TIMEOUT,
                 )
                 if response.status_code not in (200, 201):
-                    logger.error(f"OpenObserve ingestion failed for {tenant.slug}: {response.status_code} {response.text}")
+                    logger.error(f"OpenObserve ingestion failed for {tenant_slug}: {response.status_code} {response.text}")
                     raise HTTPException(
                         status_code=502,
                         detail=f"Failed to store logs: {response.text}"
@@ -211,7 +216,6 @@ async def query_agent_logs(
     start: Optional[str] = None,
     end: Optional[str] = None,
     token_info: TokenInfo = Depends(require_developer_role),
-    db: Session = Depends(get_db)
 ):
     """Query agent logs from OpenObserve.
 
@@ -246,19 +250,37 @@ async def query_agent_logs(
             raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
         effective_tenant_id = token_info.tenant_id
 
-    # If agent_id specified, verify access to that agent's tenant
-    if agent_id:
-        agent = db.query(AgentState).filter(
-            AgentState.agent_id == agent_id,
-            AgentState.deleted_at.is_(None)
-        ).first()
+    # DB lookups — release connection before the slow HTTP call to OpenObserve
+    db = SessionLocal()
+    try:
+        # If agent_id specified, verify access to that agent's tenant
+        if agent_id:
+            agent = db.query(AgentState).filter(
+                AgentState.agent_id == agent_id,
+                AgentState.deleted_at.is_(None)
+            ).first()
 
-        if not agent:
-            raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+            if not agent:
+                raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
-        # Non-super-admin must have access to agent's tenant
-        if not token_info.is_super_admin and agent.tenant_id != token_info.tenant_id:
-            raise HTTPException(status_code=403, detail=f"Access denied to agent {agent_id}")
+            # Non-super-admin must have access to agent's tenant
+            if not token_info.is_super_admin and agent.tenant_id != token_info.tenant_id:
+                raise HTTPException(status_code=403, detail=f"Access denied to agent {agent_id}")
+
+        # Per-tenant routing for queries
+        query_url = f"{OPENOBSERVE_URL}/api/default/_search"
+        auth = (OPENOBSERVE_USER, OPENOBSERVE_PASSWORD)
+        if OPENOBSERVE_MULTI_TENANT and effective_tenant_id is not None:
+            tenant = db.query(Tenant).filter(
+                Tenant.id == effective_tenant_id,
+                Tenant.deleted_at.is_(None)
+            ).first()
+            if tenant:
+                tenant_settings = get_tenant_settings(tenant)
+                query_url = get_query_url(tenant.slug)
+                auth = get_query_auth(tenant_settings)
+    finally:
+        db.close()
 
     # Build SQL query for OpenObserve with SQL injection prevention
     conditions = []
@@ -315,24 +337,6 @@ async def query_agent_logs(
 
     where_clause = " AND ".join(conditions) if conditions else "1=1"
     sql = f"SELECT * FROM {stream_name} WHERE {where_clause} ORDER BY _timestamp DESC LIMIT {limit}"
-
-    # Per-tenant routing for queries
-    tenant_settings = None
-    if OPENOBSERVE_MULTI_TENANT and effective_tenant_id is not None:
-        tenant = db.query(Tenant).filter(
-            Tenant.id == effective_tenant_id,
-            Tenant.deleted_at.is_(None)
-        ).first()
-        if tenant:
-            tenant_settings = get_tenant_settings(tenant)
-            query_url = get_query_url(tenant.slug)
-            auth = get_query_auth(tenant_settings)
-        else:
-            query_url = f"{OPENOBSERVE_URL}/api/default/_search"
-            auth = (OPENOBSERVE_USER, OPENOBSERVE_PASSWORD)
-    else:
-        query_url = f"{OPENOBSERVE_URL}/api/default/_search"
-        auth = (OPENOBSERVE_USER, OPENOBSERVE_PASSWORD)
 
     async with httpx.AsyncClient() as client:
         response = await client.post(

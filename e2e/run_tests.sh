@@ -42,13 +42,8 @@ teardown() {
     docker rm -f openobserve-mock echo-server 2>/dev/null || true
     docker network rm e2e-bridge 2>/dev/null || true
     rm -f "$SCRIPT_DIR/.agent-token"
-
-    # Restore cagent.yaml if backup exists
-    if [ -f "$SCRIPT_DIR/.cagent.yaml.bak" ]; then
-        cp "$SCRIPT_DIR/.cagent.yaml.bak" "$REPO_ROOT/data_plane/configs/cagent.yaml"
-        rm -f "$SCRIPT_DIR/.cagent.yaml.bak"
-        echo "Restored cagent.yaml."
-    fi
+    rm -f "$SCRIPT_DIR/.cagent.e2e.yaml"
+    rm -f "$SCRIPT_DIR/.cagent.yaml.bak"
 
     echo "Torn down."
 }
@@ -110,33 +105,37 @@ HTTPServer(('0.0.0.0',5080),H).serve_forever()
     echo "$AGENT_TOKEN" > "$SCRIPT_DIR/.agent-token"
     echo "Agent token created."
 
-    # 7. Patch cagent.yaml with echo-server domain for credential injection testing
+    # 7. Create a patched cagent.yaml with echo-server domain for credential
+    #    injection testing.  Write to a SEPARATE file (.cagent.e2e.yaml) so we
+    #    don't touch the tracked config — VS Code's YAML extension reformats
+    #    it on change, stripping comments and the echo-server entry.
     local CAGENT_YAML="$REPO_ROOT/data_plane/configs/cagent.yaml"
-    cp "$CAGENT_YAML" "$SCRIPT_DIR/.cagent.yaml.bak"
-    python3 - "$CAGENT_YAML" << 'PYEOF'
-import sys
-path = sys.argv[1]
-with open(path) as f:
-    content = f.read()
-entry = """
-  # E2E echo server (added by e2e/run_tests.sh)
-  - domain: echo-server
-    alias: echo
-    credential:
-      header: Authorization
-      format: "Bearer {value}"
-      env: E2E_ECHO_CREDENTIAL
-
-"""
-marker = "# =============================================================================\n# Internal Services"
-content = content.replace(marker, entry + marker)
-with open(path, 'w') as f:
-    f.write(content)
+    python3 - "$CAGENT_YAML" "$SCRIPT_DIR/.cagent.e2e.yaml" << 'PYEOF'
+import sys, yaml
+src, dst = sys.argv[1], sys.argv[2]
+with open(src) as f:
+    config = yaml.safe_load(f)
+# Ensure echo-server domain with credential is present
+domains = config.get("domains") or []
+if not any(d.get("domain") == "echo-server" for d in domains):
+    domains.append({
+        "domain": "echo-server",
+        "alias": "echo",
+        "credential": {
+            "header": "Authorization",
+            "format": "Bearer {value}",
+            "env": "E2E_ECHO_CREDENTIAL",
+        },
+    })
+    config["domains"] = domains
+with open(dst, 'w') as f:
+    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 PYEOF
-    echo "Patched cagent.yaml with echo-server domain."
+    echo "Created patched config at .cagent.e2e.yaml."
 
     # 8. Start DP in connected mode
     cd "$REPO_ROOT/data_plane"
+    E2E_CAGENT_YAML="$SCRIPT_DIR/.cagent.e2e.yaml" \
     E2E_ECHO_CREDENTIAL=test-e2e-injected-cred \
     DATAPLANE_MODE=connected \
     CONTROL_PLANE_URL=http://backend:8000 \

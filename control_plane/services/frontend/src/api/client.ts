@@ -409,6 +409,24 @@ export const api = {
     return handleResponse(response);
   },
 
+  // Analytics
+  getBlockedDomains: async (params?: {
+    agentId?: string;
+    tenantId?: number;
+    hours?: number;
+  }): Promise<{ blocked_domains: { domain: string; count: number; last_seen: string }[]; window_hours: number }> => {
+    const searchParams = new URLSearchParams();
+    if (params?.agentId) searchParams.append('agent_id', params.agentId);
+    if (params?.tenantId !== undefined) searchParams.append('tenant_id', String(params.tenantId));
+    if (params?.hours) searchParams.append('hours', String(params.hours));
+    const queryString = searchParams.toString();
+    const url = queryString ? `${API_BASE}/analytics/blocked-domains?${queryString}` : `${API_BASE}/analytics/blocked-domains`;
+    const response = await fetch(url, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse(response);
+  },
+
   rotateDomainPolicyCredential: async (id: number, credential: DomainPolicyCredential): Promise<DomainPolicy> => {
     const response = await fetch(`${API_BASE}/domain-policies/${id}/rotate-credential`, {
       method: 'POST',

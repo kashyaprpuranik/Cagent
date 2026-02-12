@@ -21,8 +21,20 @@ from control_plane.auth import (
 )
 from control_plane.utils import verify_agent_access, get_audit_tenant_id
 from control_plane.rate_limit import limiter
+from control_plane.redis_client import write_heartbeat, is_agent_online as redis_is_agent_online
 
 router = APIRouter()
+
+
+async def _check_agent_online(redis_client, agent: AgentState) -> bool:
+    """Redis-first liveness check with DB fallback."""
+    online = await redis_is_agent_online(redis_client, agent.agent_id)
+    if online is not None:
+        return online
+    # Fallback: DB
+    if agent.last_heartbeat:
+        return (datetime.utcnow() - agent.last_heartbeat).total_seconds() < 60
+    return False
 
 
 def get_or_create_agent_state(db: Session, agent_id: str = "default", tenant_id: Optional[int] = None) -> AgentState:
@@ -85,12 +97,10 @@ async def list_agents(
         query = query.filter(AgentState.tenant_id == token_info.tenant_id)
 
     agents = query.all()
+    redis_client = getattr(request.app.state, "redis", None)
     result = []
     for agent in agents:
-        # Check if agent is online (heartbeat within last 60s)
-        online = False
-        if agent.last_heartbeat:
-            online = (datetime.utcnow() - agent.last_heartbeat).total_seconds() < 60
+        online = await _check_agent_online(redis_client, agent)
 
         result.append(DataPlaneResponse(
             agent_id=agent.agent_id,
@@ -173,6 +183,16 @@ async def agent_heartbeat(
         state.pending_command_at = None
 
     db.commit()
+
+    # Write heartbeat to Redis (non-blocking, failure is safe)
+    redis_client = getattr(request.app.state, "redis", None)
+    await write_heartbeat(
+        redis_client, agent_id,
+        status=heartbeat.status,
+        cpu_percent=heartbeat.cpu_percent,
+        memory_mb=heartbeat.memory_mb,
+    )
+
     return response
 
 
@@ -368,10 +388,8 @@ async def get_agent_status(
     if not state:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
-    # Check if agent is online (heartbeat within last 60s)
-    online = False
-    if state.last_heartbeat:
-        online = (datetime.utcnow() - state.last_heartbeat).total_seconds() < 60
+    redis_client = getattr(request.app.state, "redis", None)
+    online = await _check_agent_online(redis_client, state)
 
     return AgentStatusResponse(
         agent_id=state.agent_id,

@@ -10,7 +10,7 @@ services:
   cache:
     image: redis:7-alpine
     container_name: cache
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - cache-data:/data
     networks:
@@ -107,6 +107,7 @@ services:
       - ZO_ROOT_USER_EMAIL=${OPENOBSERVE_USER:-admin@cagent.local}
       - ZO_ROOT_USER_PASSWORD=${OPENOBSERVE_PASSWORD:-admin}
       - ZO_DATA_DIR=/data
+      - ZO_COMPACT_DATA_RETENTION_DAYS=30
 
     volumes:
       - log-store-data:/data
@@ -117,6 +118,13 @@ services:
 
     networks:
       - control-net
+
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
 
     restart: unless-stopped
 

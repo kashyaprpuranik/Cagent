@@ -60,7 +60,6 @@ async def ingest_logs(
     Requires agent token. Injects trusted agent_id and tenant_id from database.
     This ensures data planes cannot spoof their identity in logs.
     """
-    import httpx
 
     # Only agent tokens can ingest logs
     if token_info.token_type != "agent":
@@ -158,40 +157,39 @@ async def ingest_logs(
 
     # --- Forward to OpenObserve ---
 
+    http_client = request.app.state.http_client
     try:
         if OPENOBSERVE_MULTI_TENANT and tenant_slug:
             auth = get_ingest_auth(tenant_settings)
             url = get_ingest_url(tenant_slug)
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    url,
-                    json=enriched_logs,
-                    auth=auth,
-                    timeout=LOG_INGEST_TIMEOUT,
+            response = await http_client.post(
+                url,
+                json=enriched_logs,
+                auth=auth,
+                timeout=LOG_INGEST_TIMEOUT,
+            )
+            if response.status_code not in (200, 201):
+                logger.error(f"OpenObserve ingestion failed for {tenant_slug}: {response.status_code} {response.text}")
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to store logs: {response.text}"
                 )
-                if response.status_code not in (200, 201):
-                    logger.error(f"OpenObserve ingestion failed for {tenant_slug}: {response.status_code} {response.text}")
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Failed to store logs: {response.text}"
-                    )
         else:
             # Legacy single-org mode
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{OPENOBSERVE_URL}/api/default/default/_json",
-                    json=enriched_logs,
-                    auth=(OPENOBSERVE_USER, OPENOBSERVE_PASSWORD),
-                    timeout=LOG_INGEST_TIMEOUT,
-                )
+            response = await http_client.post(
+                f"{OPENOBSERVE_URL}/api/default/default/_json",
+                json=enriched_logs,
+                auth=(OPENOBSERVE_USER, OPENOBSERVE_PASSWORD),
+                timeout=LOG_INGEST_TIMEOUT,
+            )
 
-                if response.status_code not in (200, 201):
-                    logger.error(f"OpenObserve ingestion failed: {response.status_code} {response.text}")
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Failed to store logs: {response.text}"
-                    )
+            if response.status_code not in (200, 201):
+                logger.error(f"OpenObserve ingestion failed: {response.status_code} {response.text}")
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to store logs: {response.text}"
+                )
     except HTTPException:
         raise
     except Exception as e:
@@ -233,7 +231,6 @@ async def query_agent_logs(
         start: Start time (RFC3339, e.g., 2024-01-01T00:00:00Z)
         end: End time (RFC3339)
     """
-    import httpx
 
     # --- Query hardening ---
 
@@ -338,38 +335,38 @@ async def query_agent_logs(
     where_clause = " AND ".join(conditions) if conditions else "1=1"
     sql = f"SELECT * FROM {stream_name} WHERE {where_clause} ORDER BY _timestamp DESC LIMIT {limit}"
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            query_url,
-            json={
-                "query": {
-                    "sql": sql,
-                    "start_time": start_us,
-                    "end_time": end_us,
-                }
-            },
-            auth=auth,
-            timeout=LOG_QUERY_TIMEOUT,
+    http_client = request.app.state.http_client
+    response = await http_client.post(
+        query_url,
+        json={
+            "query": {
+                "sql": sql,
+                "start_time": start_us,
+                "end_time": end_us,
+            }
+        },
+        auth=auth,
+        timeout=LOG_QUERY_TIMEOUT,
+    )
+
+    if response.status_code != 200:
+        # Return 502 Bad Gateway for upstream errors - don't pass through status
+        # (passing through 401 would make frontend think user token is invalid)
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenObserve query failed (status {response.status_code}): {response.text}"
         )
 
-        if response.status_code != 200:
-            # Return 502 Bad Gateway for upstream errors - don't pass through status
-            # (passing through 401 would make frontend think user token is invalid)
-            raise HTTPException(
-                status_code=502,
-                detail=f"OpenObserve query failed (status {response.status_code}): {response.text}"
-            )
+    result = response.json()
 
-        result = response.json()
-
-        # Transform to consistent format for UI
-        return {
-            "status": "success",
-            "data": {
-                "resultType": "streams",
-                "result": result.get("hits", [])
-            }
+    # Transform to consistent format for UI
+    return {
+        "status": "success",
+        "data": {
+            "resultType": "streams",
+            "result": result.get("hits", [])
         }
+    }
 
 
 # =============================================================================

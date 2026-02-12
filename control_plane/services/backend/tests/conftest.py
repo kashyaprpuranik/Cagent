@@ -92,6 +92,9 @@ def client(engine, db_session):
 
     main.app.dependency_overrides[main.get_db] = override_get_db
 
+    # Ensure routes use the DB-only fallback path (no Redis in tests)
+    main.app.state.redis = None
+
     with TestClient(main.app) as test_client:
         yield test_client
 
@@ -170,5 +173,15 @@ def mock_openobserve():
 
     fake_client = FakeClient()
 
+    # Patch both the constructor (for openobserve.py provisioning) and the
+    # shared app-state client (used by log/analytics routes).
+    import main
+    original_http_client = getattr(main.app.state, "http_client", None)
+    main.app.state.http_client = fake_client
+
     with patch("httpx.AsyncClient", return_value=fake_client):
         yield calls
+
+    # Restore original client
+    if original_http_client is not None:
+        main.app.state.http_client = original_http_client

@@ -14,6 +14,7 @@ from control_plane.schemas import TerminalSessionResponse, TerminalTicketRespons
 from control_plane.crypto import generate_token, hash_token
 from control_plane.auth import TokenInfo, require_admin_role, require_developer_role
 from control_plane.rate_limit import limiter
+from control_plane.redis_client import is_agent_online as redis_is_agent_online
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,14 @@ async def create_terminal_ticket(
     if not agent.stcp_secret_key:
         raise HTTPException(status_code=400, detail="STCP not configured for agent")
 
-    if not agent.last_heartbeat or (datetime.utcnow() - agent.last_heartbeat).total_seconds() > 60:
+    # Redis-first liveness check with DB fallback
+    redis_client = getattr(request.app.state, "redis", None)
+    online = await redis_is_agent_online(redis_client, agent_id)
+    if online is not None:
+        is_online = online
+    else:
+        is_online = agent.last_heartbeat and (datetime.utcnow() - agent.last_heartbeat).total_seconds() < 60
+    if not is_online:
         raise HTTPException(status_code=400, detail="Agent is offline")
 
     # Tenant isolation
@@ -97,9 +105,16 @@ async def terminal_websocket(
     Note: This is a simplified implementation. For production, implement
     proper SSH connection via paramiko with STCP visitor subprocess.
     """
-    # Get database session
-    db = SessionLocal()
+    # --- Auth phase: validate ticket, create session record, release DB ---
+    session_id = None
+    token_name = None
+    tenant_id = None
+    audit_tenant_id = None
+    started_at = None
+    bytes_sent = 0
+    bytes_received = 0
 
+    db = SessionLocal()
     try:
         # Accept connection first
         await websocket.accept()
@@ -157,8 +172,14 @@ async def terminal_websocket(
             await websocket.close(code=4004, reason="STCP not configured for agent")
             return
 
-        # Check if agent is online
-        if not agent.last_heartbeat or (datetime.utcnow() - agent.last_heartbeat).total_seconds() > 60:
+        # Redis-first liveness check with DB fallback
+        ws_redis_client = getattr(websocket.app.state, "redis", None)
+        ws_online = await redis_is_agent_online(ws_redis_client, agent_id)
+        if ws_online is not None:
+            is_ws_online = ws_online
+        else:
+            is_ws_online = agent.last_heartbeat and (datetime.utcnow() - agent.last_heartbeat).total_seconds() < 60
+        if not is_ws_online:
             await websocket.close(code=4004, reason="Agent is offline")
             return
 
@@ -191,9 +212,15 @@ async def terminal_websocket(
         db.commit()
 
         started_at = datetime.utcnow()
-        bytes_sent = 0
-        bytes_received = 0
+    finally:
+        db.close()
 
+    # If auth failed (session_id not set), we already closed the WS above
+    if session_id is None:
+        return
+
+    # --- Relay phase: no DB connection held ---
+    try:
         # Send welcome message
         await websocket.send_text(json.dumps({
             "type": "connected",
@@ -237,39 +264,40 @@ async def terminal_websocket(
             await websocket.close(code=4005, reason=str(e))
 
     finally:
-        # Update session record
+        # --- Cleanup phase: open new DB session to update records ---
         ended_at = datetime.utcnow()
-        duration = int((ended_at - started_at).total_seconds()) if 'started_at' in locals() else 0
+        duration = int((ended_at - started_at).total_seconds()) if started_at else 0
 
-        if 'session_id' in locals():
+        db = SessionLocal()
+        try:
             session = db.query(TerminalSession).filter(
                 TerminalSession.session_id == session_id
             ).first()
             if session:
                 session.ended_at = ended_at
                 session.duration_seconds = duration
-                session.bytes_sent = bytes_sent if 'bytes_sent' in locals() else 0
-                session.bytes_received = bytes_received if 'bytes_received' in locals() else 0
+                session.bytes_sent = bytes_sent
+                session.bytes_received = bytes_received
 
             # Audit log
             log = AuditTrail(
                 event_type="terminal_session_end",
-                user=token_name if 'token_name' in locals() else "unknown",
+                user=token_name or "unknown",
                 container_id=agent_id,
                 action=f"Terminal session ended for agent {agent_id}",
                 details=json.dumps({
                     "session_id": session_id,
                     "duration_seconds": duration,
-                    "bytes_sent": bytes_sent if 'bytes_sent' in locals() else 0,
-                    "bytes_received": bytes_received if 'bytes_received' in locals() else 0
+                    "bytes_sent": bytes_sent,
+                    "bytes_received": bytes_received,
                 }),
                 severity="INFO",
-                tenant_id=audit_tenant_id if 'audit_tenant_id' in locals() else None
+                tenant_id=audit_tenant_id,
             )
             db.add(log)
             db.commit()
-
-        db.close()
+        finally:
+            db.close()
 
 
 @router.get("/api/v1/terminal/sessions", response_model=List[TerminalSessionResponse])

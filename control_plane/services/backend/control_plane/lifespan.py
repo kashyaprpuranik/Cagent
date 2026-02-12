@@ -1,11 +1,13 @@
 import os
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 
 from control_plane.config import logger, REDIS_URL, OPENOBSERVE_MULTI_TENANT
 from control_plane.database import SessionLocal
 from control_plane.seed import seed_bootstrap, seed_test_data
+from control_plane.redis_client import create_redis_client, close_redis_client
 
 
 async def _provision_existing_tenants(db):
@@ -51,5 +53,17 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
+    # Shared HTTP client for OpenObserve calls — avoids per-request TLS setup
+    app.state.http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(15.0, connect=5.0),
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+    )
+
+    # Redis client for heartbeats and policy notifications
+    app.state.redis = await create_redis_client()
+
     yield
+
+    await close_redis_client(app.state.redis)
+    await app.state.http_client.aclose()
     logger.info("Shutting down")

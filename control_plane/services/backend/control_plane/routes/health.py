@@ -2,7 +2,9 @@ import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from starlette.responses import RedirectResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
@@ -23,9 +25,25 @@ async def root():
 
 
 @router.get("/health")
-async def health_check():
+async def health_check(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        db_status = "connected"
+    except Exception:
+        db_status = "disconnected"
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "database": db_status,
+                "timestamp": datetime.utcnow().isoformat(),
+                "version": _VERSION,
+                "uptime": int(time.monotonic() - _START_TIME),
+            },
+        )
     return {
         "status": "healthy",
+        "database": db_status,
         "timestamp": datetime.utcnow().isoformat(),
         "version": _VERSION,
         "uptime": int(time.monotonic() - _START_TIME),

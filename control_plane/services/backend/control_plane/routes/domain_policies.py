@@ -15,6 +15,7 @@ from control_plane.schemas import (
 from control_plane.crypto import encrypt_secret, decrypt_secret
 from control_plane.auth import TokenInfo, verify_token, require_admin_role, require_admin_role_with_ip_check
 from control_plane.rate_limit import limiter
+from control_plane.redis_client import publish_policy_changed
 
 router = APIRouter()
 
@@ -189,6 +190,10 @@ async def create_domain_policy(
     db.add(log)
     db.commit()
     db.refresh(db_policy)
+
+    redis_client = getattr(request.app.state, "redis", None)
+    await publish_policy_changed(redis_client, effective_tenant_id, "created", policy.domain)
+
     return domain_policy_to_response(db_policy)
 
 
@@ -383,6 +388,10 @@ async def update_domain_policy(
     db.add(log)
     db.commit()
     db.refresh(policy)
+
+    redis_client = getattr(request.app.state, "redis", None)
+    await publish_policy_changed(redis_client, policy.tenant_id, "updated", policy.domain)
+
     return domain_policy_to_response(policy)
 
 
@@ -418,6 +427,10 @@ async def delete_domain_policy(
     )
     db.add(log)
     db.commit()
+
+    redis_client = getattr(request.app.state, "redis", None)
+    await publish_policy_changed(redis_client, tenant_id, "deleted", domain)
+
     return {"deleted": True, "id": policy_id}
 
 
@@ -443,4 +456,8 @@ async def rotate_domain_policy_credential(
     policy.credential_rotated_at = datetime.utcnow()
     db.commit()
     db.refresh(policy)
+
+    redis_client = getattr(request.app.state, "redis", None)
+    await publish_policy_changed(redis_client, policy.tenant_id, "updated", policy.domain)
+
     return domain_policy_to_response(policy)

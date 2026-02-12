@@ -63,31 +63,32 @@ def _resolve_tenant_and_agent(token_info: TokenInfo, agent_id: Optional[str], te
     return effective_tenant_id, query_url, auth
 
 
-async def _query_openobserve(query_url: str, auth: tuple, sql: str, start_us: int, end_us: int) -> list:
+async def _query_openobserve(
+    http_client: httpx.AsyncClient, query_url: str, auth: tuple, sql: str, start_us: int, end_us: int,
+) -> list:
     """Execute a query against OpenObserve and return hits."""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                query_url,
-                json={
-                    "query": {
-                        "sql": sql,
-                        "start_time": start_us,
-                        "end_time": end_us,
-                    }
-                },
-                auth=auth,
-                timeout=LOG_QUERY_TIMEOUT,
+        response = await http_client.post(
+            query_url,
+            json={
+                "query": {
+                    "sql": sql,
+                    "start_time": start_us,
+                    "end_time": end_us,
+                }
+            },
+            auth=auth,
+            timeout=LOG_QUERY_TIMEOUT,
+        )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenObserve query failed (status {response.status_code}): {response.text}",
             )
 
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"OpenObserve query failed (status {response.status_code}): {response.text}",
-                )
-
-            result = response.json()
-            return result.get("hits", [])
+        result = response.json()
+        return result.get("hits", [])
     except HTTPException:
         raise
     except Exception as e:
@@ -144,7 +145,8 @@ async def get_blocked_domains(
     where_clause = " AND ".join(conditions)
     sql = f"SELECT message FROM {stream_name} WHERE {where_clause} ORDER BY _timestamp DESC LIMIT 5000"
 
-    hits = await _query_openobserve(query_url, auth, sql, start_us, end_us)
+    http_client = request.app.state.http_client
+    hits = await _query_openobserve(http_client, query_url, auth, sql, start_us, end_us)
 
     domain_counts: dict[str, int] = defaultdict(int)
     domain_last_seen: dict[str, str] = {}
@@ -208,7 +210,8 @@ async def get_blocked_timeseries(
     where_clause = " AND ".join(conditions)
     sql = f"SELECT message FROM {stream_name} WHERE {where_clause} ORDER BY _timestamp DESC LIMIT 5000"
 
-    hits = await _query_openobserve(query_url, auth, sql, start_us, end_us)
+    http_client = request.app.state.http_client
+    hits = await _query_openobserve(http_client, query_url, auth, sql, start_us, end_us)
 
     bucket_duration = (end_time - start_time) / buckets
     bucket_counts = [0] * buckets
@@ -276,7 +279,8 @@ async def get_bandwidth(
     where_clause = " AND ".join(conditions)
     sql = f"SELECT message FROM {stream_name} WHERE {where_clause} ORDER BY _timestamp DESC LIMIT 5000"
 
-    hits = await _query_openobserve(query_url, auth, sql, start_us, end_us)
+    http_client = request.app.state.http_client
+    hits = await _query_openobserve(http_client, query_url, auth, sql, start_us, end_us)
 
     domain_stats: dict[str, dict] = defaultdict(
         lambda: {"bytes_sent": 0, "bytes_received": 0, "request_count": 0}
@@ -356,7 +360,8 @@ async def diagnose_domain(
     where_clause = " AND ".join(conditions)
     sql = f"SELECT message FROM {stream_name} WHERE {where_clause} ORDER BY _timestamp DESC LIMIT 1000"
 
-    hits = await _query_openobserve(query_url, auth, sql, start_us, end_us)
+    http_client = request.app.state.http_client
+    hits = await _query_openobserve(http_client, query_url, auth, sql, start_us, end_us)
 
     recent_requests = []
     for hit in hits:

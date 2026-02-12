@@ -1,11 +1,12 @@
 import os
 import json
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
@@ -33,7 +34,10 @@ async def _check_agent_online(redis_client, agent: AgentState) -> bool:
         return online
     # Fallback: DB
     if agent.last_heartbeat:
-        return (datetime.utcnow() - agent.last_heartbeat).total_seconds() < 60
+        last_hb = agent.last_heartbeat
+        if last_hb.tzinfo is None:
+            last_hb = last_hb.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last_hb).total_seconds() < 60
     return False
 
 
@@ -45,6 +49,9 @@ def get_or_create_agent_state(db: Session, agent_id: str = "default", tenant_id:
 
     tenant_id is required when creating a new agent. Existing agents already
     have tenant_id in the database.
+
+    Uses try/except IntegrityError to handle concurrent creation attempts
+    (e.g. two heartbeats from a new agent arriving simultaneously).
     """
     state = db.query(AgentState).filter(AgentState.agent_id == agent_id).first()
     if not state:
@@ -52,24 +59,32 @@ def get_or_create_agent_state(db: Session, agent_id: str = "default", tenant_id:
             raise ValueError(f"tenant_id is required when creating new agent: {agent_id}")
         state = AgentState(agent_id=agent_id, tenant_id=tenant_id, approved=True)
         db.add(state)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            state = db.query(AgentState).filter(AgentState.agent_id == agent_id).first()
+            if not state:
+                raise
         db.refresh(state)
     elif state.deleted_at:
         # Restore soft-deleted agent as active
         state.deleted_at = None
         state.approved = True
-        state.approved_at = datetime.utcnow()
+        state.approved_at = datetime.now(timezone.utc)
         state.approved_by = "auto"
         db.commit()
         db.refresh(state)
     return state
 
 
-@router.get("/api/v1/agents", response_model=List[DataPlaneResponse])
+@router.get("/api/v1/agents")
 @limiter.limit("60/minute")
 async def list_agents(
     request: Request,
     tenant_id: Optional[int] = Query(default=None, description="Filter by tenant (super admin only)"),
+    limit: int = Query(default=100, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(verify_token)
 ):
@@ -96,20 +111,21 @@ async def list_agents(
             raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
         query = query.filter(AgentState.tenant_id == token_info.tenant_id)
 
-    agents = query.all()
+    total = query.count()
+    agents = query.offset(offset).limit(limit).all()
     redis_client = getattr(request.app.state, "redis", None)
-    result = []
+    items = []
     for agent in agents:
         online = await _check_agent_online(redis_client, agent)
 
-        result.append(DataPlaneResponse(
+        items.append(DataPlaneResponse(
             agent_id=agent.agent_id,
             status=agent.status or "unknown",
             online=online,
             tenant_id=agent.tenant_id,
             last_heartbeat=agent.last_heartbeat
         ))
-    return result
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/api/v1/agent/heartbeat", response_model=AgentHeartbeatResponse)
@@ -142,21 +158,14 @@ async def agent_heartbeat(
     # Get or create agent with tenant from token
     state = get_or_create_agent_state(db, agent_id, token_info.tenant_id)
 
-    # Update status from heartbeat
-    state.status = heartbeat.status
-    state.container_id = heartbeat.container_id
-    state.uptime_seconds = heartbeat.uptime_seconds
-    state.cpu_percent = int(heartbeat.cpu_percent) if heartbeat.cpu_percent else None
-    state.memory_mb = int(heartbeat.memory_mb) if heartbeat.memory_mb else None
-    state.memory_limit_mb = int(heartbeat.memory_limit_mb) if heartbeat.memory_limit_mb else None
-    state.last_heartbeat = datetime.utcnow()
+    redis_client = getattr(request.app.state, "redis", None)
 
-    # Update last command result if reported
+    # Update last command result if reported (infrequent, always DB)
     if heartbeat.last_command:
         state.last_command = heartbeat.last_command
         state.last_command_result = heartbeat.last_command_result
         state.last_command_message = heartbeat.last_command_message
-        state.last_command_at = datetime.utcnow()
+        state.last_command_at = datetime.now(timezone.utc)
 
         # Log command completion
         log = AuditTrail(
@@ -182,18 +191,93 @@ async def agent_heartbeat(
         state.pending_command_args = None
         state.pending_command_at = None
 
+    # DB fallback: write status fields when Redis is unavailable
+    if redis_client is None:
+        state.status = heartbeat.status
+        state.container_id = heartbeat.container_id
+        state.uptime_seconds = heartbeat.uptime_seconds
+        state.cpu_percent = int(heartbeat.cpu_percent) if heartbeat.cpu_percent else None
+        state.memory_mb = int(heartbeat.memory_mb) if heartbeat.memory_mb else None
+        state.memory_limit_mb = int(heartbeat.memory_limit_mb) if heartbeat.memory_limit_mb else None
+        state.last_heartbeat = datetime.now(timezone.utc)
+
     db.commit()
 
-    # Write heartbeat to Redis (non-blocking, failure is safe)
-    redis_client = getattr(request.app.state, "redis", None)
+    # Write heartbeat to Redis (primary path — background flush syncs to DB)
     await write_heartbeat(
         redis_client, agent_id,
         status=heartbeat.status,
+        container_id=heartbeat.container_id,
+        uptime_seconds=heartbeat.uptime_seconds,
         cpu_percent=heartbeat.cpu_percent,
         memory_mb=heartbeat.memory_mb,
+        memory_limit_mb=heartbeat.memory_limit_mb,
     )
 
     return response
+
+
+def _queue_command(
+    agent_id: str,
+    command: str,
+    db: Session,
+    token_info: TokenInfo,
+    args: Optional[dict] = None,
+    audit_event: Optional[str] = None,
+    audit_action: Optional[str] = None,
+    audit_severity: str = "INFO",
+) -> dict:
+    """Queue a command for an agent, with optimistic concurrency and optional audit.
+
+    Shared implementation for wipe/restart/stop/start endpoints.
+    Raises HTTPException on 404 (agent not found) or 409 (command already pending).
+    """
+    verify_agent_access(token_info, agent_id, db)
+
+    state = db.query(AgentState).filter(
+        AgentState.agent_id == agent_id,
+        AgentState.deleted_at.is_(None)
+    ).first()
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+
+    values = {
+        "pending_command": command,
+        "pending_command_at": datetime.now(timezone.utc),
+    }
+    if args is not None:
+        values["pending_command_args"] = json.dumps(args)
+
+    rows = db.execute(
+        update(AgentState)
+        .where(AgentState.id == state.id)
+        .where(AgentState.pending_command.is_(None))
+        .values(**values)
+    ).rowcount
+    if rows == 0:
+        db.refresh(state)
+        raise HTTPException(
+            status_code=409,
+            detail=f"Command already pending: {state.pending_command}"
+        )
+
+    if audit_event:
+        log = AuditTrail(
+            event_type=audit_event,
+            user=token_info.token_name or "admin",
+            action=audit_action or f"{command} requested for {agent_id}",
+            severity=audit_severity,
+            tenant_id=get_audit_tenant_id(token_info, db, state)
+        )
+        db.add(log)
+
+    db.commit()
+
+    return {
+        "status": "queued",
+        "command": command,
+        "message": f"{command.capitalize()} command queued for {agent_id}. Will execute on next agent heartbeat."
+    }
 
 
 @router.post("/api/v1/agents/{agent_id}/wipe")
@@ -209,48 +293,13 @@ async def queue_agent_wipe(
 
     The command will be delivered to agent-manager on next heartbeat.
     """
-    verify_agent_access(token_info, agent_id, db)
-
-    state = db.query(AgentState).filter(
-        AgentState.agent_id == agent_id,
-        AgentState.deleted_at.is_(None)
-    ).first()
-    if not state:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
-
-    rows = db.execute(
-        update(AgentState)
-        .where(AgentState.id == state.id)
-        .where(AgentState.pending_command.is_(None))
-        .values(
-            pending_command="wipe",
-            pending_command_args=json.dumps({"wipe_workspace": body.wipe_workspace}),
-            pending_command_at=datetime.utcnow(),
-        )
-    ).rowcount
-    if rows == 0:
-        db.refresh(state)
-        raise HTTPException(
-            status_code=409,
-            detail=f"Command already pending: {state.pending_command}"
-        )
-
-    # Log the wipe request
-    log = AuditTrail(
-        event_type="agent_wipe_requested",
-        user=token_info.token_name or "admin",
-        action=f"Wipe requested for {agent_id} (workspace={'wipe' if body.wipe_workspace else 'preserve'})",
-        severity="WARNING",
-        tenant_id=get_audit_tenant_id(token_info, db, state)
+    return _queue_command(
+        agent_id, "wipe", db, token_info,
+        args={"wipe_workspace": body.wipe_workspace},
+        audit_event="agent_wipe_requested",
+        audit_action=f"Wipe requested for {agent_id} (workspace={'wipe' if body.wipe_workspace else 'preserve'})",
+        audit_severity="WARNING",
     )
-    db.add(log)
-    db.commit()
-
-    return {
-        "status": "queued",
-        "command": "wipe",
-        "message": f"Wipe command queued for {agent_id}. Will execute on next agent heartbeat."
-    }
 
 
 @router.post("/api/v1/agents/{agent_id}/restart")
@@ -262,34 +311,7 @@ async def queue_agent_restart(
     token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a restart command for the specified agent (admin only)."""
-    verify_agent_access(token_info, agent_id, db)
-
-    state = db.query(AgentState).filter(
-        AgentState.agent_id == agent_id,
-        AgentState.deleted_at.is_(None)
-    ).first()
-    if not state:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
-
-    rows = db.execute(
-        update(AgentState)
-        .where(AgentState.id == state.id)
-        .where(AgentState.pending_command.is_(None))
-        .values(pending_command="restart", pending_command_at=datetime.utcnow())
-    ).rowcount
-    if rows == 0:
-        db.refresh(state)
-        raise HTTPException(
-            status_code=409,
-            detail=f"Command already pending: {state.pending_command}"
-        )
-    db.commit()
-
-    return {
-        "status": "queued",
-        "command": "restart",
-        "message": f"Restart command queued for {agent_id}. Will execute on next agent heartbeat."
-    }
+    return _queue_command(agent_id, "restart", db, token_info)
 
 
 @router.post("/api/v1/agents/{agent_id}/stop")
@@ -301,34 +323,7 @@ async def queue_agent_stop(
     token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a stop command for the specified agent (admin only)."""
-    verify_agent_access(token_info, agent_id, db)
-
-    state = db.query(AgentState).filter(
-        AgentState.agent_id == agent_id,
-        AgentState.deleted_at.is_(None)
-    ).first()
-    if not state:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
-
-    rows = db.execute(
-        update(AgentState)
-        .where(AgentState.id == state.id)
-        .where(AgentState.pending_command.is_(None))
-        .values(pending_command="stop", pending_command_at=datetime.utcnow())
-    ).rowcount
-    if rows == 0:
-        db.refresh(state)
-        raise HTTPException(
-            status_code=409,
-            detail=f"Command already pending: {state.pending_command}"
-        )
-    db.commit()
-
-    return {
-        "status": "queued",
-        "command": "stop",
-        "message": f"Stop command queued for {agent_id}. Will execute on next agent heartbeat."
-    }
+    return _queue_command(agent_id, "stop", db, token_info)
 
 
 @router.post("/api/v1/agents/{agent_id}/start")
@@ -340,34 +335,7 @@ async def queue_agent_start(
     token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a start command for the specified agent (admin only)."""
-    verify_agent_access(token_info, agent_id, db)
-
-    state = db.query(AgentState).filter(
-        AgentState.agent_id == agent_id,
-        AgentState.deleted_at.is_(None)
-    ).first()
-    if not state:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
-
-    rows = db.execute(
-        update(AgentState)
-        .where(AgentState.id == state.id)
-        .where(AgentState.pending_command.is_(None))
-        .values(pending_command="start", pending_command_at=datetime.utcnow())
-    ).rowcount
-    if rows == 0:
-        db.refresh(state)
-        raise HTTPException(
-            status_code=409,
-            detail=f"Command already pending: {state.pending_command}"
-        )
-    db.commit()
-
-    return {
-        "status": "queued",
-        "command": "start",
-        "message": f"Start command queued for {agent_id}. Will execute on next agent heartbeat."
-    }
+    return _queue_command(agent_id, "start", db, token_info)
 
 
 @router.get("/api/v1/agents/{agent_id}/status", response_model=AgentStatusResponse)
@@ -440,9 +408,8 @@ async def generate_stcp_secret(
     # Generate cryptographically secure secret
     secret = secrets.token_urlsafe(32)
     state.stcp_secret_key = encrypt_secret(secret)
-    db.commit()
 
-    # Log the action
+    # Log + save in single transaction (no partial state if audit fails)
     log = AuditTrail(
         event_type="stcp_secret_generated",
         user=token_info.token_name or "admin",
@@ -491,9 +458,8 @@ async def generate_stcp_secret_from_token(
     # Generate cryptographically secure secret
     secret = secrets.token_urlsafe(32)
     state.stcp_secret_key = encrypt_secret(secret)
-    db.commit()
 
-    # Log the action
+    # Log + save in single transaction (no partial state if audit fails)
     log = AuditTrail(
         event_type="stcp_secret_generated",
         user=token_info.token_name or "agent",

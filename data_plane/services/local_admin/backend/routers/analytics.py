@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import time
 from collections import defaultdict
@@ -12,6 +13,9 @@ from fastapi import APIRouter, Query, HTTPException
 from ..constants import ENVOY_CONTAINER_NAME, COREDNS_CONTAINER_NAME, CAGENT_CONFIG_PATH, docker_client
 
 router = APIRouter()
+
+# Only allow valid DNS domain characters to prevent command injection in nslookup
+_VALID_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9._-]+$')
 
 
 def _get_envoy_logs(hours: int) -> str:
@@ -201,6 +205,10 @@ async def diagnose_domain(
     domain: str = Query(..., min_length=1),
 ):
     """Diagnose why a domain was blocked. Checks allowlist, DNS, and recent logs."""
+    # Validate domain format to prevent command injection
+    if not _VALID_DOMAIN_RE.match(domain) or len(domain) > 253:
+        raise HTTPException(status_code=400, detail="Invalid domain format")
+
     # Check allowlist
     in_allowlist = False
     try:

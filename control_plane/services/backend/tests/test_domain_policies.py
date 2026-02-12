@@ -84,7 +84,7 @@ class TestDomainPolicies:
 
         response = client.get("/api/v1/domain-policies", headers=auth_headers)
         assert response.status_code == 200
-        policies = response.json()
+        policies = response.json()["items"]
         assert len(policies) >= 1
 
         # Find our policy
@@ -155,7 +155,7 @@ class TestDomainPolicies:
 
         # Verify deleted
         list_response = client.get("/api/v1/domain-policies", headers=auth_headers)
-        policies = list_response.json()
+        policies = list_response.json()["items"]
         assert not any(p["domain"] == "delete-test.example.com" for p in policies)
 
     def test_rotate_credential(self, client, auth_headers):
@@ -327,7 +327,7 @@ class TestPerAgentDomainPolicies:
         # List with agent_id filter
         response = client.get("/api/v1/domain-policies?agent_id=filter-agent", headers=auth_headers)
         assert response.status_code == 200
-        policies = response.json()
+        policies = response.json()["items"]
         # Should only include filter-agent policies
         for policy in policies:
             assert policy.get("agent_id") == "filter-agent" or policy.get("agent_id") is None

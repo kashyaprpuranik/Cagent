@@ -8,7 +8,7 @@ class TestApiTokens:
         """Should return empty list when no DB tokens exist."""
         response = client.get("/api/v1/tokens", headers=auth_headers)
         assert response.status_code == 200
-        assert isinstance(response.json(), list)
+        assert isinstance(response.json()["items"], list)
 
     def test_create_admin_token(self, client, auth_headers):
         """Should create an admin token."""
@@ -112,7 +112,7 @@ class TestApiTokens:
 
         response = client.get("/api/v1/tokens", headers=auth_headers)
         assert response.status_code == 200
-        tokens = response.json()
+        tokens = response.json()["items"]
         assert len(tokens) >= 1
         token = next((t for t in tokens if t["name"] == "list-test-token"), None)
         assert token is not None
@@ -132,7 +132,7 @@ class TestApiTokens:
 
         # Verify deleted
         list_response = client.get("/api/v1/tokens", headers=auth_headers)
-        tokens = list_response.json()
+        tokens = list_response.json()["items"]
         assert not any(t["name"] == "delete-me-token" for t in tokens)
 
     def test_disable_token(self, client, auth_headers):

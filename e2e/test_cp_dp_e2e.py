@@ -61,10 +61,43 @@ def acme_admin_headers():
 PROXY = "http://10.200.1.10:8443"
 
 
-def exec_in_agent(command: str) -> subprocess.CompletedProcess:
-    """Execute a command inside the agent container."""
+def _discover_agent_container() -> str:
+    """Discover an agent container by label, falling back to 'agent'."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "label=cagent.role=agent",
+             "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        names = result.stdout.strip().splitlines()
+        if names:
+            return names[0]
+    except Exception:
+        pass
+    return "agent"
+
+
+def _discover_all_agent_containers() -> list[str]:
+    """Discover all agent containers by label."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "label=cagent.role=agent",
+             "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        names = result.stdout.strip().splitlines()
+        if names:
+            return sorted(names)
+    except Exception:
+        pass
+    return ["agent"]
+
+
+def exec_in_agent(command: str, container_name: str = None) -> subprocess.CompletedProcess:
+    """Execute a command inside an agent container (discovered by label)."""
+    name = container_name or _discover_agent_container()
     return subprocess.run(
-        ["docker", "exec", "agent", "sh", "-c", command],
+        ["docker", "exec", name, "sh", "-c", command],
         capture_output=True,
         text=True,
         timeout=30,
@@ -114,6 +147,41 @@ def wait_for_access_log(marker: str, timeout: float = 15.0, poll: float = 1.0) -
 
 
 # ---------------------------------------------------------------------------
+# TestMultiAgentContainers
+# ---------------------------------------------------------------------------
+
+class TestMultiAgentContainers:
+    """Verify multi-agent container discovery and isolation."""
+
+    def test_multiple_agents_discovered(self, cp_running):
+        """Should discover at least 2 agent containers by label."""
+        names = _discover_all_agent_containers()
+        assert len(names) >= 2, f"Expected >=2 agent containers, found {len(names)}: {names}"
+
+    def test_all_agents_can_proxy(self, cp_running):
+        """Every agent container should route traffic through the proxy."""
+        for name in _discover_all_agent_containers():
+            result = exec_in_agent(
+                f"curl -s -o /dev/null -w '%{{http_code}}' -x {PROXY} "
+                f"--connect-timeout 5 http://api.github.com/",
+                container_name=name,
+            )
+            code = result.stdout.strip()
+            assert code.isdigit() and int(code) < 500, \
+                f"{name}: proxy request failed with {code}"
+
+    def test_all_agents_isolated(self, cp_running):
+        """Every agent container should be blocked from external IPs."""
+        for name in _discover_all_agent_containers():
+            result = exec_in_agent(
+                "nc -z -w 2 8.8.8.8 53 && echo FAIL || echo BLOCKED",
+                container_name=name,
+            )
+            assert "BLOCKED" in result.stdout, \
+                f"{name} can reach external IPs directly — isolation broken!"
+
+
+# ---------------------------------------------------------------------------
 # TestHeartbeatAndRegistration
 # ---------------------------------------------------------------------------
 
@@ -124,7 +192,7 @@ class TestHeartbeatAndRegistration:
         """Agent should appear in the agents list after heartbeat."""
         r = requests.get(f"{CP_BASE}/api/v1/agents", headers=admin_headers)
         assert r.status_code == 200
-        agents = r.json()
+        agents = r.json()["items"]
         agent_ids = [a["agent_id"] for a in agents]
         assert AGENT_ID in agent_ids, f"Agent {AGENT_ID} not in {agent_ids}"
 
@@ -200,7 +268,7 @@ class TestDomainPolicies:
             f"{CP_BASE}/api/v1/domain-policies", headers=admin_headers
         )
         if r.status_code == 200:
-            for p in r.json():
+            for p in r.json()["items"]:
                 if p["domain"] == "e2e-test.example.com":
                     requests.delete(
                         f"{CP_BASE}/api/v1/domain-policies/{p['id']}",
@@ -338,7 +406,7 @@ class TestTenantIsolation:
             f"{CP_BASE}/api/v1/agents", headers=acme_admin_headers
         )
         assert r.status_code == 200
-        agents = r.json()
+        agents = r.json()["items"]
         agent_ids = [a["agent_id"] for a in agents]
         assert AGENT_ID not in agent_ids, (
             f"Acme tenant should not see {AGENT_ID}"
@@ -372,7 +440,7 @@ class TestCredentialInjection:
             f"{CP_BASE}/api/v1/domain-policies", headers=admin_headers
         )
         if r.status_code == 200:
-            for p in r.json():
+            for p in r.json()["items"]:
                 if p["domain"] == "e2e-cred-test.example.com":
                     requests.delete(
                         f"{CP_BASE}/api/v1/domain-policies/{p['id']}",

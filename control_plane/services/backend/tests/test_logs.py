@@ -1,6 +1,6 @@
 """Tests for audit trail, log ingestion/query hardening, and multi-tenant routing."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 
@@ -114,7 +114,7 @@ class TestLogIngestionHardening:
         agent_token = self._create_agent_token(client, auth_headers, "old-log-agent")
         headers = {"Authorization": f"Bearer {agent_token}"}
 
-        old_ts = (datetime.utcnow() - timedelta(hours=25)).isoformat()
+        old_ts = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
         response = client.post(
             "/api/v1/logs/ingest",
             headers=headers,
@@ -143,8 +143,8 @@ class TestLogQueryHardening:
 
     def test_query_time_range_too_large(self, client, dev_headers, mock_openobserve):
         """Time range > LOG_QUERY_MAX_TIME_RANGE_DAYS should be rejected with 400."""
-        start = (datetime.utcnow() - timedelta(days=31)).isoformat() + "Z"
-        end = datetime.utcnow().isoformat() + "Z"
+        start = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat() + "Z"
+        end = datetime.now(timezone.utc).isoformat() + "Z"
         response = client.get(
             f"/api/v1/logs/query?start={start}&end={end}",
             headers=dev_headers
@@ -154,8 +154,8 @@ class TestLogQueryHardening:
 
     def test_query_within_time_range(self, client, dev_headers, mock_openobserve):
         """Query within allowed time range should succeed."""
-        start = (datetime.utcnow() - timedelta(days=1)).isoformat() + "Z"
-        end = datetime.utcnow().isoformat() + "Z"
+        start = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat() + "Z"
+        end = datetime.now(timezone.utc).isoformat() + "Z"
         response = client.get(
             f"/api/v1/logs/query?start={start}&end={end}",
             headers=dev_headers

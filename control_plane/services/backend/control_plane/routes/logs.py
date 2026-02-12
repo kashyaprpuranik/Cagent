@@ -31,6 +31,19 @@ router = APIRouter()
 _SAFE_QUERY_RE = re.compile(r'^[a-zA-Z0-9\s\.\-_:/@=,\[\]{}|*+#]+$')
 
 
+def _escape_sql_string(value: str) -> str:
+    """Escape a value for safe use in a SQL single-quoted string literal."""
+    return value.replace("'", "''").replace("\\", "\\\\")
+
+
+def _escape_sql_like(value: str) -> str:
+    """Escape LIKE metacharacters so they match literally."""
+    value = value.replace("\\", "\\\\")
+    value = value.replace("%", "\\%")
+    value = value.replace("_", "\\_")
+    return value
+
+
 async def _parse_log_batch(request: Request) -> LogBatch:
     """Parse log batch from request body.
 
@@ -294,17 +307,17 @@ async def query_agent_logs(
                 status_code=400,
                 detail="Query contains disallowed characters. Use only letters, numbers, spaces, and common punctuation (. - _ : / @ = , [ ] { } | * + #)."
             )
-        conditions.append(f"message LIKE '%{query}%'")
+        conditions.append(f"message LIKE '%{_escape_sql_like(query)}%'")
     if source:
         # Validate source is alphanumeric
         if not source.replace("_", "").replace("-", "").isalnum():
             raise HTTPException(status_code=400, detail="Invalid source parameter")
-        conditions.append(f"source = '{source}'")
+        conditions.append(f"source = '{_escape_sql_string(source)}'")
     if agent_id:
         # Validate agent_id is alphanumeric with hyphens/underscores
         if not agent_id.replace("_", "").replace("-", "").isalnum():
             raise HTTPException(status_code=400, detail="Invalid agent_id parameter")
-        conditions.append(f"agent_id = '{agent_id}'")
+        conditions.append(f"agent_id = '{_escape_sql_string(agent_id)}'")
 
     # Time range
     if not end:
@@ -388,12 +401,17 @@ async def get_audit_trail(
     end_time: Optional[str] = Query(default=None, description="ISO datetime string"),
     search: Optional[str] = None,
     limit: int = Query(default=100, le=1000),
-    offset: int = 0
+    offset: int = 0,
+    cursor: Optional[str] = Query(default=None, description="Cursor for keyset pagination (id:timestamp)")
 ):
     """Search and retrieve audit trail entries (admin only).
 
     Super admins can filter by tenant_id, or see all logs if not specified.
     Tenant admins see only their tenant's logs.
+
+    Supports cursor-based pagination via the ``cursor`` parameter (format:
+    ``{id}:{iso-timestamp}``).  When provided, ``offset`` is ignored and the
+    query seeks to rows older than the cursor using an efficient keyset scan.
     """
     query = db.query(AuditTrail)
 
@@ -437,5 +455,30 @@ async def get_audit_trail(
         )
 
     total = query.count()
-    items = query.order_by(AuditTrail.timestamp.desc()).offset(offset).limit(limit).all()
-    return {"items": items, "total": total}
+
+    # Cursor-based pagination (keyset seek) — preferred for large tables
+    if cursor:
+        try:
+            cursor_id_str, cursor_ts_str = cursor.split(":", 1)
+            cursor_id = int(cursor_id_str)
+            cursor_ts = datetime.fromisoformat(cursor_ts_str)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid cursor format (expected id:iso-timestamp)")
+        from sqlalchemy import or_, and_
+        query = query.filter(
+            or_(
+                AuditTrail.timestamp < cursor_ts,
+                and_(AuditTrail.timestamp == cursor_ts, AuditTrail.id < cursor_id),
+            )
+        )
+        items = query.order_by(AuditTrail.timestamp.desc(), AuditTrail.id.desc()).limit(limit).all()
+    else:
+        items = query.order_by(AuditTrail.timestamp.desc()).offset(offset).limit(limit).all()
+
+    # Build next cursor from last item
+    next_cursor = None
+    if items:
+        last = items[-1]
+        next_cursor = f"{last.id}:{last.timestamp.isoformat()}"
+
+    return {"items": items, "total": total, "next_cursor": next_cursor}

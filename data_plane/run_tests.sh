@@ -49,12 +49,16 @@ if [ "$E2E" = true ]; then
     NEED_RESTART=false
 
     # Check agent is running with the dev profile (runc), not standard (gVisor)
-    AGENT_SERVICE=$(docker inspect agent --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
-    if [ "$AGENT_SERVICE" = "agent" ]; then
-        echo "Agent is running with standard profile (gVisor), tearing down to restart with dev profile..."
-        docker compose --profile standard --profile admin --profile email --profile auditing down 2>/dev/null || true
-        NEED_RESTART=true
-    elif [ -z "$AGENT_SERVICE" ]; then
+    # Discover agent containers by label (no fixed container_name)
+    AGENT_CID=$(docker ps --filter "label=cagent.role=agent" --format "{{.ID}}" -q 2>/dev/null | head -1)
+    if [ -n "$AGENT_CID" ]; then
+        AGENT_SERVICE=$(docker inspect "$AGENT_CID" --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
+        if [ "$AGENT_SERVICE" = "agent" ]; then
+            echo "Agent is running with standard profile (gVisor), tearing down to restart with dev profile..."
+            docker compose --profile standard --profile admin --profile email --profile auditing down 2>/dev/null || true
+            NEED_RESTART=true
+        fi
+    else
         NEED_RESTART=true
     fi
 
@@ -95,14 +99,14 @@ if [ "$E2E" = true ]; then
             done
             docker network rm "$net" 2>/dev/null || true
         done
-        echo "Starting data plane (standalone, --profile dev --profile admin --profile auditing)..."
-        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build
+        echo "Starting data plane (standalone, --profile dev --profile admin --profile auditing, 2 agents)..."
+        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build --scale agent-dev=2
         CONTAINERS_STARTED=true
         echo "Waiting for containers to stabilize..."
         sleep 5
     else
         echo "Data plane already running, rebuilding images in case code changed..."
-        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build
+        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build --scale agent-dev=2
         echo "Waiting for containers to stabilize..."
         sleep 5
     fi

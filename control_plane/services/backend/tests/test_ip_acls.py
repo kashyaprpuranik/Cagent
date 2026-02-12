@@ -7,7 +7,7 @@ class TestIpAcls:
     def _get_default_tenant_id(self, client, super_admin_headers):
         """Helper: get the default tenant ID."""
         response = client.get("/api/v1/tenants", headers=super_admin_headers)
-        tenants = response.json()
+        tenants = response.json()["items"]
         tenant = next(t for t in tenants if t["slug"] == "default")
         return tenant["id"]
 
@@ -109,7 +109,7 @@ class TestIpAcls:
     def test_ip_acl_tenant_isolation(self, client, super_admin_headers, auth_headers):
         """Tenant admin should not access another tenant's ACLs."""
         # Get acme tenant ID (auth_headers is scoped to default tenant)
-        tenants = client.get("/api/v1/tenants", headers=super_admin_headers).json()
+        tenants = client.get("/api/v1/tenants", headers=super_admin_headers).json()["items"]
         acme_tenant = next(t for t in tenants if t["slug"] == "acme")
 
         response = client.get(

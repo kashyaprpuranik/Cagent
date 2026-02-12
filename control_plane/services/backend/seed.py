@@ -17,7 +17,7 @@ import sys
 import argparse
 import hashlib
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -73,7 +73,7 @@ def seed_database(reset: bool = False, show_token: bool = False):
                 tenant_id=default_tenant.id,
                 status="virtual",
                 approved=True,
-                approved_at=datetime.utcnow(),
+                approved_at=datetime.now(timezone.utc),
                 approved_by="seed-script"
             )
             db.add(default_agent)
@@ -106,9 +106,9 @@ def seed_database(reset: bool = False, show_token: bool = False):
                 tenant_id=default_tenant.id,
                 status="running",
                 approved=True,
-                approved_at=datetime.utcnow(),
+                approved_at=datetime.now(timezone.utc),
                 approved_by="seed-script",
-                last_heartbeat=datetime.utcnow(),
+                last_heartbeat=datetime.now(timezone.utc),
                 uptime_seconds=3600,
                 cpu_percent=15,
                 memory_mb=256,

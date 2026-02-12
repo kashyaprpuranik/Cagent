@@ -1,9 +1,12 @@
+import logging
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -15,14 +18,18 @@ from control_plane.schemas import (
 from control_plane.crypto import encrypt_secret, decrypt_secret
 from control_plane.auth import TokenInfo, verify_token, require_admin_role, require_admin_role_with_ip_check
 from control_plane.rate_limit import limiter
-from control_plane.redis_client import publish_policy_changed
+from control_plane.redis_client import (
+    publish_policy_changed,
+    get_cached_domain_policies,
+    cache_domain_policies,
+)
 
 router = APIRouter()
 
 
 def _filter_not_expired(query):
     """Add filter to exclude expired policies (expires_at IS NULL OR expires_at > now)."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return query.filter(or_(DomainPolicy.expires_at.is_(None), DomainPolicy.expires_at > now))
 
 
@@ -86,20 +93,22 @@ def build_policy_response(policy: DomainPolicy) -> dict:
             formatted_value = policy.credential_format.replace("{value}", decrypted)
             result["header_name"] = policy.credential_header
             result["header_value"] = formatted_value
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to decrypt credential for policy {policy.id}: {e}")
 
     return result
 
 
-@router.get("/api/v1/domain-policies", response_model=List[DomainPolicyResponse])
+@router.get("/api/v1/domain-policies")
 @limiter.limit("60/minute")
 async def list_domain_policies(
     request: Request,
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin_role),
     agent_id: Optional[str] = None,
-    tenant_id: Optional[int] = None
+    tenant_id: Optional[int] = None,
+    limit: int = Query(default=100, le=1000),
+    offset: int = Query(default=0, ge=0),
 ):
     """List domain policies. Filter by tenant_id (super admin) or agent_id."""
     query = db.query(DomainPolicy)
@@ -121,8 +130,9 @@ async def list_domain_policies(
     # Filter out expired policies
     query = _filter_not_expired(query)
 
-    policies = query.order_by(DomainPolicy.domain).all()
-    return [domain_policy_to_response(p) for p in policies]
+    total = query.count()
+    policies = query.order_by(DomainPolicy.domain).offset(offset).limit(limit).all()
+    return {"items": [domain_policy_to_response(p) for p in policies], "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/api/v1/domain-policies", response_model=DomainPolicyResponse)
@@ -174,7 +184,7 @@ async def create_domain_policy(
         credential_header=policy.credential.header if policy.credential else None,
         credential_format=policy.credential.format if policy.credential else None,
         credential_value_encrypted=encrypted_value,
-        credential_rotated_at=datetime.utcnow() if policy.credential else None,
+        credential_rotated_at=datetime.now(timezone.utc) if policy.credential else None,
     )
     db.add(db_policy)
 
@@ -278,7 +288,19 @@ async def export_domain_policies(
     """Export all domains for CoreDNS allowlist.
 
     Returns list of domains (without credentials) for DNS filtering.
+    Uses Redis cache (300 s TTL) when available.
     """
+    # Build cache key from token context
+    redis_client = getattr(request.app.state, "redis", None)
+    agent_part = token_info.agent_id or "all"
+    tenant_part = token_info.tenant_id or "global"
+    cache_key = f"tenant:{tenant_part}:agent:{agent_part}:export"
+
+    # Check Redis cache first
+    cached = await get_cached_domain_policies(redis_client, cache_key)
+    if cached is not None:
+        return cached
+
     query = db.query(DomainPolicy).filter(DomainPolicy.enabled == True)
 
     # Tenant isolation
@@ -299,10 +321,15 @@ async def export_domain_policies(
     policies = query.all()
     domains = [p.domain for p in policies]
 
-    return {
+    result = {
         "domains": domains,
-        "generated_at": datetime.utcnow().isoformat()
+        "generated_at": datetime.now(timezone.utc).isoformat()
     }
+
+    # Populate Redis cache
+    await cache_domain_policies(redis_client, cache_key, result)
+
+    return result
 
 
 @router.get("/api/v1/domain-policies/{policy_id}", response_model=DomainPolicyResponse)
@@ -374,7 +401,7 @@ async def update_domain_policy(
         policy.credential_header = update.credential.header
         policy.credential_format = update.credential.format
         policy.credential_value_encrypted = encrypt_secret(update.credential.value)
-        policy.credential_rotated_at = datetime.utcnow()
+        policy.credential_rotated_at = datetime.now(timezone.utc)
 
     # Audit log
     log = AuditTrail(
@@ -453,7 +480,17 @@ async def rotate_domain_policy_credential(
     policy.credential_header = credential.header
     policy.credential_format = credential.format
     policy.credential_value_encrypted = encrypt_secret(credential.value)
-    policy.credential_rotated_at = datetime.utcnow()
+    policy.credential_rotated_at = datetime.now(timezone.utc)
+
+    log = AuditTrail(
+        event_type="domain_policy_credential_rotated",
+        user=token_info.token_name or "admin",
+        action=f"Domain policy credential rotated: {policy.domain}",
+        details=json.dumps({"policy_id": policy_id, "domain": policy.domain}),
+        severity="WARNING",
+        tenant_id=policy.tenant_id
+    )
+    db.add(log)
     db.commit()
     db.refresh(policy)
 

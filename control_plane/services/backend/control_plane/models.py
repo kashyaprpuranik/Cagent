@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, UniqueConstraint, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, UniqueConstraint, Index, JSON, event
 from sqlalchemy.orm import relationship
 
 from control_plane.database import Base
@@ -13,7 +13,7 @@ class Tenant(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), unique=True, index=True)
     slug = Column(String(50), unique=True, index=True)  # URL-safe identifier
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     deleted_at = Column(DateTime, nullable=True, index=True)  # Soft delete
     settings = Column(Text, nullable=True)  # JSON for tenant-specific settings
 
@@ -32,9 +32,9 @@ class TenantIpAcl(Base):
     cidr = Column(String(50), nullable=False)  # CIDR notation: "10.0.0.0/8" or "192.168.1.1/32"
     description = Column(String(500))
     enabled = Column(Boolean, default=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     created_by = Column(String(100))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationship
     tenant = relationship("Tenant", back_populates="ip_acls")
@@ -48,7 +48,7 @@ class AuditTrail(Base):
     __tablename__ = "audit_trail"
 
     id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     event_type = Column(String(50), index=True)
     user = Column(String(100), index=True)
     container_id = Column(String(100))
@@ -57,6 +57,10 @@ class AuditTrail(Base):
     severity = Column(String(20), index=True)
     # Target tenant whose data was affected (every auditable action has a target tenant).
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+
+    __table_args__ = (
+        Index('ix_audit_trail_tenant_timestamp', 'tenant_id', 'timestamp'),
+    )
 
 
 class DomainPolicy(Base):
@@ -94,12 +98,13 @@ class DomainPolicy(Base):
     # Temporary allowlist: auto-expire after this timestamp
     expires_at = Column(DateTime, nullable=True, index=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         # Unique constraint: one policy per domain per agent per tenant
         UniqueConstraint('domain', 'agent_id', 'tenant_id', name='uq_domain_policy_tenant'),
+        Index('ix_domain_policy_tenant_enabled', 'tenant_id', 'enabled'),
     )
 
 
@@ -131,8 +136,8 @@ class EmailPolicy(Base):
     credential_type = Column(String(20))  # oauth2, password
     credential_data_encrypted = Column(Text)  # Fernet-encrypted JSON blob
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint('name', 'tenant_id', name='uq_email_policy_name_tenant'),
@@ -174,6 +179,10 @@ class AgentState(Base):
     # STCP configuration for P2P SSH tunneling
     stcp_secret_key = Column(String(256), nullable=True)  # Encrypted STCP secret
 
+    __table_args__ = (
+        Index('ix_agent_state_tenant_deleted', 'tenant_id', 'deleted_at'),
+    )
+
 
 class TerminalSession(Base):
     """Audit log for terminal sessions."""
@@ -184,12 +193,16 @@ class TerminalSession(Base):
     agent_id = Column(String(100), index=True)
     user = Column(String(100), index=True)  # Token name
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     ended_at = Column(DateTime, nullable=True)
     duration_seconds = Column(Integer, nullable=True)
     bytes_sent = Column(Integer, default=0)
     bytes_received = Column(Integer, default=0)
     client_ip = Column(String(45))  # IPv4 or IPv6
+
+    __table_args__ = (
+        Index('ix_terminal_session_tenant_started', 'tenant_id', 'started_at'),
+    )
 
 
 class WebSocketTicket(Base):
@@ -211,7 +224,7 @@ class WebSocketTicket(Base):
     roles = Column(String(200), nullable=False)
     is_super_admin = Column(Boolean, default=False)
     used = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime, nullable=False)
 
 
@@ -232,7 +245,30 @@ class ApiToken(Base):
     # Roles: admin (full access), developer (read + terminal access)
     roles = Column(String(200), default="admin")
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime, nullable=True)
     last_used_at = Column(DateTime, nullable=True)
     enabled = Column(Boolean, default=True)
+
+
+# ---------------------------------------------------------------------------
+# Partial indexes (PostgreSQL only) — created conditionally after metadata
+# creation so that SQLite (used in tests) simply skips them.
+# ---------------------------------------------------------------------------
+
+@event.listens_for(Base.metadata, "after_create")
+def _create_partial_indexes(target, connection, **kw):
+    if connection.dialect.name != "postgresql":
+        return
+    connection.execute(
+        __import__("sqlalchemy").text(
+            "CREATE INDEX IF NOT EXISTS ix_agent_state_active "
+            "ON agent_state(tenant_id, agent_id) WHERE deleted_at IS NULL"
+        )
+    )
+    connection.execute(
+        __import__("sqlalchemy").text(
+            "CREATE INDEX IF NOT EXISTS ix_domain_policy_active "
+            "ON domain_policies(tenant_id, domain) WHERE enabled = true"
+        )
+    )

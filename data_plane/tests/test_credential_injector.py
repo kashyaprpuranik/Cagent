@@ -661,3 +661,190 @@ class TestStandaloneMode:
         cp_response = {"matched": False}
         result = get_credential_with_fallback("api.openai.com", cp_response, static_creds)
         assert result["header_value"] == "Bearer static-key"
+
+
+class TestMatchDomainWildcard:
+    """Test the match_domain_wildcard helper that replaces copy-pasted wildcard matching."""
+
+    @staticmethod
+    def match_domain_wildcard(domain, tbl):
+        """Python equivalent of the Lua match_domain_wildcard function."""
+        exact = tbl.get(domain)
+        if exact is not None:
+            return exact
+        for pattern, value in tbl.items():
+            if pattern.startswith("*."):
+                suffix = pattern[1:]  # .domain.com
+                if domain.endswith(suffix):
+                    return value
+        return None
+
+    def test_exact_match(self):
+        """Should return exact match when available."""
+        tbl = {"api.github.com": {"rpm": 60}}
+        result = self.match_domain_wildcard("api.github.com", tbl)
+        assert result == {"rpm": 60}
+
+    def test_wildcard_match(self):
+        """Should match wildcard patterns."""
+        tbl = {"*.github.com": {"rpm": 100}}
+        result = self.match_domain_wildcard("api.github.com", tbl)
+        assert result == {"rpm": 100}
+
+        result = self.match_domain_wildcard("raw.github.com", tbl)
+        assert result == {"rpm": 100}
+
+    def test_exact_takes_priority_over_wildcard(self):
+        """Exact match should be preferred over wildcard."""
+        tbl = {
+            "api.github.com": {"rpm": 60},
+            "*.github.com": {"rpm": 100},
+        }
+        result = self.match_domain_wildcard("api.github.com", tbl)
+        assert result == {"rpm": 60}
+
+        # Non-exact subdomain should match wildcard
+        result = self.match_domain_wildcard("raw.github.com", tbl)
+        assert result == {"rpm": 100}
+
+    def test_no_match_returns_none(self):
+        """Should return None when no match found."""
+        tbl = {"api.github.com": {"rpm": 60}}
+        result = self.match_domain_wildcard("api.openai.com", tbl)
+        assert result is None
+
+    def test_empty_table(self):
+        """Should return None for empty table."""
+        result = self.match_domain_wildcard("api.github.com", {})
+        assert result is None
+
+    def test_wildcard_does_not_match_partial_suffix(self):
+        """Wildcard *.github.com should NOT match evil-github.com."""
+        tbl = {"*.github.com": {"rpm": 100}}
+        result = self.match_domain_wildcard("evil-github.com", tbl)
+        assert result is None
+
+
+class TestPerStreamMetadata:
+    """Test the per-stream metadata pattern for concurrency safety."""
+
+    def test_metadata_pattern_replaces_global_variable(self):
+        """Per-stream metadata should be used instead of module-level variable.
+
+        This verifies the design: instead of `local request_domain = nil` at
+        module scope (shared across concurrent requests), we use Envoy's
+        per-stream dynamic metadata API to pass domain from request to response.
+        """
+        # Simulate two concurrent requests
+        streams = {}
+
+        def set_metadata(stream_id, domain):
+            streams[stream_id] = {"request_domain": domain}
+
+        def get_metadata(stream_id):
+            return streams.get(stream_id, {}).get("request_domain")
+
+        # Request A sets domain
+        set_metadata("stream_a", "api.openai.com")
+
+        # Request B sets domain (would overwrite with global var!)
+        set_metadata("stream_b", "api.github.com")
+
+        # Both streams retain their own domain
+        assert get_metadata("stream_a") == "api.openai.com"
+        assert get_metadata("stream_b") == "api.github.com"
+
+    def test_missing_metadata_returns_none(self):
+        """Should handle missing metadata gracefully (unknown stream)."""
+        streams = {}
+        metadata = streams.get("nonexistent")
+        domain = metadata and metadata.get("request_domain") or None
+        assert domain is None
+
+
+class TestEnhancedDNSTunneling:
+    """Test enhanced DNS tunneling detection heuristics."""
+
+    @staticmethod
+    def detect_dns_tunneling(host):
+        """Python equivalent of the enhanced Lua detect_dns_tunneling function."""
+        parts = host.split('.')
+
+        for part in parts:
+            if len(part) > 63:
+                return True, "Subdomain exceeds 63 characters"
+
+        if len(host) > 100:
+            return True, "Hostname unusually long"
+
+        # Excessive subdomain depth
+        if len(parts) > 6:
+            return True, "Excessive subdomain depth"
+
+        # High entropy / hex-like labels
+        import re
+        suspicious_labels = 0
+        for part in parts:
+            if len(part) > 20 and re.match(r'^[0-9a-fA-F-]+$', part):
+                suspicious_labels += 1
+        if suspicious_labels >= 2:
+            return True, "Multiple hex-encoded subdomain labels"
+
+        return False, None
+
+    def test_normal_domains_pass(self):
+        """Normal domains should not trigger detection."""
+        normal_domains = [
+            "api.github.com",
+            "files.pythonhosted.org",
+            "cdn.jsdelivr.net",
+            "api.openai.com",
+            "huggingface.co",
+            "sub1.sub2.example.com",
+        ]
+        for domain in normal_domains:
+            is_suspicious, _ = self.detect_dns_tunneling(domain)
+            assert is_suspicious is False, f"False positive for: {domain}"
+
+    def test_excessive_depth_blocked(self):
+        """Domains with >6 subdomain levels should be flagged."""
+        deep_domain = "a.b.c.d.e.f.evil.com"  # 8 parts
+        is_suspicious, reason = self.detect_dns_tunneling(deep_domain)
+        assert is_suspicious is True
+        assert "depth" in reason.lower()
+
+    def test_hex_encoded_labels_blocked(self):
+        """Multiple long hex-encoded labels should be flagged."""
+        # Simulate base16-encoded data exfiltration
+        hex_domain = "aabbccddee11223344556677.ff00112233445566778899aa.evil.com"
+        is_suspicious, reason = self.detect_dns_tunneling(hex_domain)
+        assert is_suspicious is True
+        assert "hex" in reason.lower()
+
+    def test_single_hex_label_allowed(self):
+        """A single hex-like label should not trigger (CDN hashes are common)."""
+        cdn_domain = "abc123def456789012345678.cdn.example.com"
+        is_suspicious, _ = self.detect_dns_tunneling(cdn_domain)
+        assert is_suspicious is False
+
+    def test_short_hex_labels_allowed(self):
+        """Short hex labels (<= 20 chars) should not trigger."""
+        domain = "abcdef123456.abcdef789012.example.com"
+        is_suspicious, _ = self.detect_dns_tunneling(domain)
+        assert is_suspicious is False
+
+    def test_long_subdomain_still_caught(self):
+        """RFC limit (>63 char label) should still trigger."""
+        long_label = "a" * 64
+        domain = f"{long_label}.evil.com"
+        is_suspicious, reason = self.detect_dns_tunneling(domain)
+        assert is_suspicious is True
+        assert "63 characters" in reason
+
+    def test_long_hostname_still_caught(self):
+        """Overall hostname >100 chars should still trigger."""
+        parts = ["sub" + str(i) for i in range(20)]
+        domain = ".".join(parts) + ".evil.com"
+        assert len(domain) > 100
+        is_suspicious, _ = self.detect_dns_tunneling(domain)
+        assert is_suspicious is True

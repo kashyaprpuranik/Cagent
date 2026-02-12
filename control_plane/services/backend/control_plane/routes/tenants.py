@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
@@ -15,33 +16,50 @@ from control_plane.openobserve import provision_tenant_org, delete_tenant_org, s
 router = APIRouter()
 
 
-@router.get("/api/v1/tenants", response_model=List[TenantResponse])
+@router.get("/api/v1/tenants")
 @limiter.limit("60/minute")
 async def list_tenants(
     request: Request,
+    limit: int = Query(default=100, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_super_admin)
 ):
     """List all tenants (super admin only). Excludes soft-deleted tenants."""
-    tenants = db.query(Tenant).filter(
-        Tenant.deleted_at.is_(None)
-    ).all()
-    result = []
-    for t in tenants:
-        # Count only non-deleted agents (excluding __default__)
-        agent_count = db.query(AgentState).filter(
-            AgentState.tenant_id == t.id,
+    # Single query with subquery to avoid N+1
+    agent_count_subq = (
+        db.query(
+            AgentState.tenant_id,
+            func.count(AgentState.id).label("cnt"),
+        )
+        .filter(
             AgentState.deleted_at.is_(None),
-            AgentState.agent_id != "__default__"
-        ).count()
-        result.append(TenantResponse(
+            AgentState.agent_id != "__default__",
+        )
+        .group_by(AgentState.tenant_id)
+        .subquery()
+    )
+
+    base_query = (
+        db.query(Tenant, func.coalesce(agent_count_subq.c.cnt, 0))
+        .outerjoin(agent_count_subq, Tenant.id == agent_count_subq.c.tenant_id)
+        .filter(Tenant.deleted_at.is_(None))
+    )
+
+    total = db.query(Tenant).filter(Tenant.deleted_at.is_(None)).count()
+    rows = base_query.offset(offset).limit(limit).all()
+
+    items = [
+        TenantResponse(
             id=t.id,
             name=t.name,
             slug=t.slug,
             created_at=t.created_at,
-            agent_count=agent_count
-        ))
-    return result
+            agent_count=cnt,
+        )
+        for t, cnt in rows
+    ]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/api/v1/tenants", response_model=TenantResponse)
@@ -79,7 +97,7 @@ async def create_tenant(
         tenant_id=tenant.id,
         status="virtual",
         approved=True,
-        approved_at=datetime.utcnow(),
+        approved_at=datetime.now(timezone.utc),
         approved_by="system"
     )
     db.add(default_agent)
@@ -174,7 +192,7 @@ async def delete_tenant(
         except Exception as e:
             logger.warning(f"Failed to clean up OpenObserve org for tenant {tenant.slug}: {e}")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Soft-delete all agents for this tenant
     agents = db.query(AgentState).filter(

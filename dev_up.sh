@@ -155,11 +155,16 @@ start_dp() {
         export DATAPLANE_MODE="standalone"
     fi
 
+    # Scale: 2 agent containers by default
+    local agent_service="agent-dev"
+    [ "$DP_AGENT_PROFILE" = "standard" ] && agent_service="agent"
+    local scale_flag="--scale ${agent_service}=2"
+
     echo "Building DP images..."
     docker compose $profiles build
 
-    echo "Starting DP services..."
-    docker compose $profiles up -d
+    echo "Starting DP services (2 agent containers)..."
+    docker compose $profiles up -d $scale_flag
 
     # In connected mode, bridge DP containers to CP's Docker network.
     # This lets agent-manager and vector reach backend directly,
@@ -178,24 +183,25 @@ start_dp() {
         fi
     fi
 
-    # Wait for agent container to be running
-    echo "Waiting for agent container..."
+    # Wait for agent container(s) to be running (discovered by label)
+    echo "Waiting for agent container(s)..."
     RETRIES=20
-    until docker inspect -f '{{.State.Running}}' agent 2>/dev/null | grep -q true; do
+    until docker ps --filter "label=cagent.role=agent" -q 2>/dev/null | grep -q .; do
         RETRIES=$((RETRIES - 1))
         if [ $RETRIES -le 0 ]; then
-            echo "  ERROR: Agent container failed to start"
+            echo "  ERROR: Agent container(s) failed to start"
             docker compose $profiles logs 2>/dev/null | tail -20
             exit 1
         fi
         sleep 2
     done
-    echo "  Agent container: OK"
+    echo "  Agent container(s): OK"
 
     # Wait for HTTP proxy to be healthy (probe from agent container via proxy)
     echo "Waiting for HTTP proxy..."
+    AGENT_CONTAINER=$(docker ps --filter "label=cagent.role=agent" --format "{{.Names}}" | head -1)
     RETRIES=15
-    until docker exec agent curl -sf -x http://10.200.1.10:8443 --connect-timeout 2 http://api.github.com/ -o /dev/null 2>/dev/null; do
+    until docker exec "$AGENT_CONTAINER" curl -sf -x http://10.200.1.10:8443 --connect-timeout 2 http://api.github.com/ -o /dev/null 2>/dev/null; do
         RETRIES=$((RETRIES - 1))
         if [ $RETRIES -le 0 ]; then
             echo "  WARNING: HTTP proxy health check timed out (continuing anyway)"
@@ -227,9 +233,10 @@ seed_logs() {
     echo ""
     echo "=== Generating Log Traffic ==="
 
-    # Run the seed traffic script inside the agent container
+    # Run the seed traffic script inside an agent container
     # (baked into agent image at /seed_traffic.py)
-    docker exec agent python3 /seed_traffic.py
+    AGENT_CONTAINER=$(docker ps --filter "label=cagent.role=agent" --format "{{.Names}}" | head -1)
+    docker exec "$AGENT_CONTAINER" python3 /seed_traffic.py
 
     # Wait for logs to propagate through Vector -> CP -> OpenObserve
     echo ""

@@ -373,3 +373,11 @@ class LogEntry(BaseModel):
 class LogBatch(BaseModel):
     """Batch of log entries for ingestion."""
     logs: List[LogEntry]
+
+
+class PaginatedResponse(BaseModel):
+    """Generic paginated list response."""
+    items: List
+    total: int
+    limit: int
+    offset: int

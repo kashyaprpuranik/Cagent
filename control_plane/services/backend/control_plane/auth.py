@@ -1,7 +1,7 @@
 import ipaddress
 import threading
 import time as _time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from fastapi import HTTPException, Depends, Request
@@ -32,12 +32,20 @@ _token_cache_lock = threading.Lock()
 
 
 def invalidate_token_cache(token_hash: str) -> None:
-    """Remove a token from the verification cache.
+    """Remove a token from the in-memory verification cache.
 
     Call this when a token is deleted, disabled, or modified.
+    For Redis invalidation, use ``invalidate_token_cache_async``.
     """
     with _token_cache_lock:
         _token_cache.pop(token_hash, None)
+
+
+async def invalidate_token_cache_async(token_hash: str, redis_client) -> None:
+    """Remove a token from both in-memory and Redis caches."""
+    invalidate_token_cache(token_hash)
+    from control_plane.redis_client import delete_cached_token
+    await delete_cached_token(redis_client, token_hash)
 
 
 def clear_token_cache() -> None:
@@ -70,15 +78,45 @@ class TokenInfo:
         """Check if token has a specific role."""
         return role in self.roles or self.is_super_admin
 
+    def to_dict(self) -> dict:
+        """Serialize to a dict for Redis cache storage."""
+        return {
+            "token_type": self.token_type,
+            "agent_id": self.agent_id,
+            "token_name": self.token_name,
+            "tenant_id": self.tenant_id,
+            "is_super_admin": self.is_super_admin,
+            "roles": self.roles,
+            "api_token_id": self.api_token_id,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TokenInfo":
+        """Deserialize from a dict (Redis cache)."""
+        return cls(
+            token_type=d["token_type"],
+            agent_id=d.get("agent_id"),
+            token_name=d.get("token_name", ""),
+            tenant_id=d.get("tenant_id"),
+            is_super_admin=d.get("is_super_admin", False),
+            roles=d.get("roles"),
+            api_token_id=d.get("api_token_id"),
+        )
+
 
 async def verify_token(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> TokenInfo:
     """Verify token and return token info with type and permissions.
 
-    Uses an in-memory cache (60 s TTL) to avoid a DB round-trip on every
-    request.  ``last_used_at`` is only flushed to the DB when the previous
+    Lookup order:
+    1. Redis cache (shared across workers) — fastest
+    2. In-memory cache (per-worker fallback when Redis unavailable)
+    3. DB lookup — populates both caches on miss
+
+    ``last_used_at`` is only flushed to the DB when the previous
     write was more than 10 minutes ago.
     """
     if not credentials:
@@ -88,7 +126,34 @@ async def verify_token(
     token_hash_value = hash_token(token)
     now = _time.monotonic()
 
-    # --- cache lookup ---
+    # --- Redis cache lookup ---
+    app = getattr(request, "app", None)
+    state = getattr(app, "state", None) if app else None
+    redis_client = getattr(state, "redis", None) if state else None
+    from control_plane.redis_client import get_cached_token_info, cache_token_info
+
+    redis_hit = await get_cached_token_info(redis_client, token_hash_value)
+    if redis_hit is not None:
+        info = TokenInfo.from_dict(redis_hit)
+        # Lazily update last_used_at if stale
+        with _token_cache_lock:
+            cached = _token_cache.get(token_hash_value)
+        last_write = cached[2] if cached else 0
+        if now - last_write >= _LAST_USED_WRITE_INTERVAL:
+            db.execute(
+                ApiToken.__table__.update()
+                .where(ApiToken.token_hash == token_hash_value)
+                .values(last_used_at=datetime.now(timezone.utc))
+            )
+            db.commit()
+            with _token_cache_lock:
+                _token_cache[token_hash_value] = (info, now, now)
+        elif cached is None:
+            with _token_cache_lock:
+                _token_cache[token_hash_value] = (info, now, last_write)
+        return info
+
+    # --- In-memory cache lookup (fallback when Redis is None) ---
     with _token_cache_lock:
         cached = _token_cache.get(token_hash_value)
     if cached is not None:
@@ -99,7 +164,7 @@ async def verify_token(
                 db.execute(
                     ApiToken.__table__.update()
                     .where(ApiToken.token_hash == token_hash_value)
-                    .values(last_used_at=datetime.utcnow())
+                    .values(last_used_at=datetime.now(timezone.utc))
                 )
                 db.commit()
                 with _token_cache_lock:
@@ -113,12 +178,15 @@ async def verify_token(
     ).first()
 
     if db_token:
-        # Check expiry
-        if db_token.expires_at and db_token.expires_at < datetime.utcnow():
+        # Check expiry (handle naive datetimes from legacy DB entries)
+        token_exp = db_token.expires_at
+        if token_exp and token_exp.tzinfo is None:
+            token_exp = token_exp.replace(tzinfo=timezone.utc)
+        if token_exp and token_exp < datetime.now(timezone.utc):
             raise HTTPException(status_code=403, detail="Token expired")
 
         # Update last used timestamp
-        db_token.last_used_at = datetime.utcnow()
+        db_token.last_used_at = datetime.now(timezone.utc)
         db.commit()
 
         # For agent tokens, get tenant_id from the agent
@@ -145,23 +213,16 @@ async def verify_token(
             api_token_id=db_token.id,
         )
 
-        # Populate cache
+        # Populate in-memory cache
         with _token_cache_lock:
             _token_cache[token_hash_value] = (info, now, now)
+
+        # Populate Redis cache (non-blocking, failure is safe)
+        await cache_token_info(redis_client, token_hash_value, info.to_dict())
 
         return info
 
     raise HTTPException(status_code=403, detail="Invalid token")
-
-
-async def require_admin(token_info: TokenInfo = Depends(verify_token)) -> TokenInfo:
-    """Require admin token for management operations."""
-    if token_info.token_type != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail="Admin token required for this operation"
-        )
-    return token_info
 
 
 async def require_agent(token_info: TokenInfo = Depends(verify_token)) -> TokenInfo:

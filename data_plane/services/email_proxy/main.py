@@ -7,6 +7,7 @@ Enforces address allowlists and rate limits per account.
 
 import logging
 import json
+import re
 import sys
 from contextlib import asynccontextmanager
 
@@ -17,6 +18,11 @@ from config import load_email_config, EmailAccount
 from providers import create_provider
 from providers.base import EmailProvider
 from policy import check_recipients_allowed, check_sender_allowed, rate_limiter
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Remove characters that could cause header injection or path traversal."""
+    return re.sub(r'[\r\n\x00/\\]', '', filename)[:255] or "attachment"
 
 # JSON logging to stdout
 handler = logging.StreamHandler(sys.stdout)
@@ -247,7 +253,7 @@ def get_attachment(
         return Response(
             content=data,
             media_type=content_type,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": f'attachment; filename="{_sanitize_filename(filename)}"'},
         )
     except Exception as e:
         logger.error(f"Attachment download failed for {account}/{uid}/{part_id}: {e}")

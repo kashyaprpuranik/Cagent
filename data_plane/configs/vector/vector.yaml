@@ -14,11 +14,13 @@ api:
 # SOURCES
 # =============================================================================
 sources:
-  # Docker container logs (agent, envoy, coredns stdout/stderr)
+  # Docker container logs (agent(s), envoy, coredns stdout/stderr)
+  # Agent containers are discovered by label; infrastructure by name.
   docker_logs:
     type: docker_logs
+    include_labels:
+      - "cagent.role=agent"
     include_containers:
-      - "agent"
       - "http-proxy"
       - "dns-filter"
       - "agent-manager"
@@ -181,6 +183,7 @@ transforms:
       if exists(.request_id) { extra.request_id = .request_id }
       if exists(.syscall) { extra.syscall = .syscall }
       if exists(.syscall_result) { extra.syscall_result = .syscall_result }
+      if exists(.container_name) { extra.container_name = .container_name }
 
       . = {"logs": [compact({"timestamp": ts, "message": msg, "source": src, "level": lvl, "extra": extra})]}
 
@@ -202,13 +205,14 @@ sinks:
     auth:
       strategy: bearer
       token: "${CONTROL_PLANE_TOKEN}"
+    compression: gzip
     batch:
-      max_events: 50
-      timeout_secs: 5
+      max_events: 200
+      timeout_secs: 10
     request:
       headers:
         Content-Type: application/json
-      rate_limit_num: 100
+      rate_limit_num: 500
       rate_limit_duration_secs: 60
       retry_initial_backoff_secs: 2
       retry_max_duration_secs: 30

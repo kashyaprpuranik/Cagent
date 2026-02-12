@@ -29,7 +29,7 @@ def _resolve_tenant_and_agent(token_info: TokenInfo, agent_id: Optional[str], te
     else:
         if not token_info.tenant_id:
             raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
-        effective_tenant_id = tenant_id if token_info.is_super_admin else token_info.tenant_id
+        effective_tenant_id = token_info.tenant_id
 
     query_url = f"{OPENOBSERVE_URL}/api/default/_search"
     auth = (OPENOBSERVE_USER, OPENOBSERVE_PASSWORD)
@@ -96,13 +96,18 @@ async def _query_openobserve(
         raise HTTPException(status_code=502, detail=f"Log store unreachable: {e}")
 
 
+def _escape_sql_string(value: str) -> str:
+    """Escape a value for safe use in a SQL single-quoted string literal."""
+    return value.replace("'", "''").replace("\\", "\\\\")
+
+
 def _build_conditions(effective_tenant_id: Optional[int], agent_id: Optional[str]) -> list[str]:
     """Build common WHERE conditions for OpenObserve SQL."""
     conditions = ["source = 'envoy'"]
     if effective_tenant_id is not None:
         conditions.append(f"tenant_id = {int(effective_tenant_id)}")
     if agent_id:
-        conditions.append(f"agent_id = '{agent_id}'")
+        conditions.append(f"agent_id = '{_escape_sql_string(agent_id)}'")
     return conditions
 
 
@@ -141,6 +146,8 @@ async def get_blocked_domains(
 
     start_us, end_us, _, _ = _time_range(hours)
     conditions = _build_conditions(effective_tenant_id, agent_id)
+    # Filter 403s in SQL to reduce data transfer
+    conditions.append("str_match(message, '\"response_code\":\"403\"')")
     stream_name = "logs" if OPENOBSERVE_MULTI_TENANT else "default"
     where_clause = " AND ".join(conditions)
     sql = f"SELECT message FROM {stream_name} WHERE {where_clause} ORDER BY _timestamp DESC LIMIT 5000"
@@ -206,6 +213,8 @@ async def get_blocked_timeseries(
 
     start_us, end_us, start_time, end_time = _time_range(hours)
     conditions = _build_conditions(effective_tenant_id, agent_id)
+    # Filter 403s in SQL to reduce data transfer
+    conditions.append("str_match(message, '\"response_code\":\"403\"')")
     stream_name = "logs" if OPENOBSERVE_MULTI_TENANT else "default"
     where_clause = " AND ".join(conditions)
     sql = f"SELECT message FROM {stream_name} WHERE {where_clause} ORDER BY _timestamp DESC LIMIT 5000"

@@ -101,7 +101,7 @@ class TestRBAC:
 
         response = client.get("/api/v1/tokens", headers=auth_headers)
         assert response.status_code == 200
-        tokens = response.json()
+        tokens = response.json()["items"]
         token = next((t for t in tokens if t["name"] == "list-role-token"), None)
         assert token is not None
         assert "roles" in token

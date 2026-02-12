@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 # Key prefix / TTL constants
 _HEARTBEAT_PREFIX = "hb:"
 _HEARTBEAT_TTL = 60  # seconds
+_TOKEN_CACHE_PREFIX = "tc:"
+_TOKEN_CACHE_TTL = 60  # seconds
+_DOMAIN_POLICY_PREFIX = "dp:"
+_DOMAIN_POLICY_TTL = 300  # seconds
 
 # Pub/sub channel
 _POLICY_CHANNEL = "policy_changed"
@@ -140,4 +144,138 @@ async def publish_policy_changed(client, tenant_id, action: str, domain: str) ->
         return True
     except Exception as exc:
         logger.warning("Redis publish_policy_changed failed: %s", exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Token cache helpers
+# ---------------------------------------------------------------------------
+
+async def cache_token_info(client, token_hash: str, info_dict: dict) -> bool:
+    """Cache a serialized TokenInfo dict in Redis (60 s TTL).
+
+    Returns ``True`` on success, ``False`` otherwise.
+    """
+    if client is None:
+        return False
+    try:
+        key = f"{_TOKEN_CACHE_PREFIX}{token_hash}"
+        await client.setex(key, _TOKEN_CACHE_TTL, json.dumps(info_dict))
+        return True
+    except Exception as exc:
+        logger.warning("Redis cache_token_info failed: %s", exc)
+        return False
+
+
+async def get_cached_token_info(client, token_hash: str) -> Optional[dict]:
+    """Read a cached TokenInfo dict from Redis.
+
+    Returns the parsed dict or ``None``.
+    """
+    if client is None:
+        return None
+    try:
+        key = f"{_TOKEN_CACHE_PREFIX}{token_hash}"
+        raw = await client.get(key)
+        if raw is None:
+            return None
+        return json.loads(raw)
+    except Exception as exc:
+        logger.warning("Redis get_cached_token_info failed: %s", exc)
+        return None
+
+
+async def delete_cached_token(client, token_hash: str) -> bool:
+    """Delete a cached token from Redis.
+
+    Returns ``True`` on success, ``False`` otherwise.
+    """
+    if client is None:
+        return False
+    try:
+        key = f"{_TOKEN_CACHE_PREFIX}{token_hash}"
+        await client.delete(key)
+        return True
+    except Exception as exc:
+        logger.warning("Redis delete_cached_token failed: %s", exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat scan helper
+# ---------------------------------------------------------------------------
+
+async def scan_all_heartbeats(client) -> list:
+    """Iterate all heartbeat keys via SCAN and return parsed dicts.
+
+    Returns an empty list when Redis is unavailable.
+    """
+    if client is None:
+        return []
+    try:
+        results = []
+        async for key in client.scan_iter(match=f"{_HEARTBEAT_PREFIX}*", count=200):
+            raw = await client.get(key)
+            if raw:
+                results.append(json.loads(raw))
+        return results
+    except Exception as exc:
+        logger.warning("Redis scan_all_heartbeats failed: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Domain policy cache helpers
+# ---------------------------------------------------------------------------
+
+async def cache_domain_policies(client, cache_key: str, data: dict) -> bool:
+    """Cache domain policy export data (300 s TTL).
+
+    Returns ``True`` on success, ``False`` otherwise.
+    """
+    if client is None:
+        return False
+    try:
+        key = f"{_DOMAIN_POLICY_PREFIX}{cache_key}"
+        await client.setex(key, _DOMAIN_POLICY_TTL, json.dumps(data))
+        return True
+    except Exception as exc:
+        logger.warning("Redis cache_domain_policies failed: %s", exc)
+        return False
+
+
+async def get_cached_domain_policies(client, cache_key: str) -> Optional[dict]:
+    """Read cached domain policy export data.
+
+    Returns the parsed dict or ``None``.
+    """
+    if client is None:
+        return None
+    try:
+        key = f"{_DOMAIN_POLICY_PREFIX}{cache_key}"
+        raw = await client.get(key)
+        if raw is None:
+            return None
+        return json.loads(raw)
+    except Exception as exc:
+        logger.warning("Redis get_cached_domain_policies failed: %s", exc)
+        return None
+
+
+async def invalidate_domain_policy_cache(client, tenant_id) -> bool:
+    """Delete all cached domain policy entries for a tenant.
+
+    Returns ``True`` on success, ``False`` otherwise.
+    """
+    if client is None:
+        return False
+    try:
+        keys = []
+        async for key in client.scan_iter(match=f"{_DOMAIN_POLICY_PREFIX}tenant:{tenant_id}:*", count=200):
+            keys.append(key)
+        if keys:
+            await client.delete(*keys)
+        return True
+    except Exception as exc:
+        logger.warning("Redis invalidate_domain_policy_cache failed: %s", exc)
         return False

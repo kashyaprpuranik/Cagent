@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
@@ -8,17 +8,19 @@ from control_plane.database import get_db
 from control_plane.models import AgentState, ApiToken, AuditTrail
 from control_plane.schemas import ApiTokenCreate, ApiTokenResponse, ApiTokenCreatedResponse
 from control_plane.crypto import generate_token, hash_token
-from control_plane.auth import TokenInfo, require_admin_role, require_admin_role_with_ip_check, invalidate_token_cache
+from control_plane.auth import TokenInfo, require_admin_role, require_admin_role_with_ip_check, invalidate_token_cache, invalidate_token_cache_async
 from control_plane.rate_limit import limiter
 
 router = APIRouter()
 
 
-@router.get("/api/v1/tokens", response_model=List[ApiTokenResponse])
+@router.get("/api/v1/tokens")
 @limiter.limit("60/minute")
 async def list_tokens(
     request: Request,
     tenant_id: Optional[int] = Query(default=None, description="Filter by tenant (super admin only)"),
+    limit: int = Query(default=100, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin_role)
 ):
@@ -41,8 +43,9 @@ async def list_tokens(
             raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
         query = query.filter(ApiToken.tenant_id == token_info.tenant_id)
 
-    tokens = query.all()
-    return [ApiTokenResponse(
+    total = query.count()
+    tokens = query.offset(offset).limit(limit).all()
+    items = [ApiTokenResponse(
         id=t.id,
         name=t.name,
         token_type=t.token_type,
@@ -55,6 +58,7 @@ async def list_tokens(
         last_used_at=t.last_used_at,
         enabled=t.enabled
     ) for t in tokens]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/api/v1/tokens", response_model=ApiTokenCreatedResponse)
@@ -125,7 +129,7 @@ async def create_token(
     # Calculate expiry
     expires_at = None
     if body.expires_in_days:
-        expires_at = datetime.utcnow() + timedelta(days=body.expires_in_days)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)
 
     # Validate roles — agent tokens get no roles by default, admin tokens get "admin"
     valid_roles = {"admin", "developer"}
@@ -211,7 +215,8 @@ async def delete_token(
 
     token_name = db_token.name
     deleted_token_tenant_id = db_token.tenant_id
-    invalidate_token_cache(db_token.token_hash)
+    redis_client = getattr(request.app.state, "redis", None)
+    await invalidate_token_cache_async(db_token.token_hash, redis_client)
 
     # Log token deletion — target is the tenant the token belonged to
     log = AuditTrail(
@@ -248,7 +253,8 @@ async def update_token(
 
     if enabled is not None:
         db_token.enabled = enabled
-        invalidate_token_cache(db_token.token_hash)
+        redis_client = getattr(request.app.state, "redis", None)
+        await invalidate_token_cache_async(db_token.token_hash, redis_client)
 
         # Log the change — target is the tenant the token belongs to
         action = "enabled" if enabled else "disabled"

@@ -1,7 +1,7 @@
 import json
 import uuid
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Request, WebSocket, WebSocketDisconnect
@@ -55,7 +55,10 @@ async def create_terminal_ticket(
     if online is not None:
         is_online = online
     else:
-        is_online = agent.last_heartbeat and (datetime.utcnow() - agent.last_heartbeat).total_seconds() < 60
+        last_hb = agent.last_heartbeat
+        if last_hb and last_hb.tzinfo is None:
+            last_hb = last_hb.replace(tzinfo=timezone.utc)
+        is_online = last_hb and (datetime.now(timezone.utc) - last_hb).total_seconds() < 60
     if not is_online:
         raise HTTPException(status_code=400, detail="Agent is offline")
 
@@ -76,7 +79,7 @@ async def create_terminal_ticket(
         token_name=token_info.token_name,
         roles=",".join(token_info.roles),
         is_super_admin=token_info.is_super_admin,
-        expires_at=datetime.utcnow() + timedelta(seconds=TICKET_EXPIRY_SECONDS),
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=TICKET_EXPIRY_SECONDS),
     )
     db.add(ticket)
     db.commit()
@@ -135,23 +138,30 @@ async def terminal_websocket(
             await websocket.close(code=4003, reason="Invalid ticket")
             return
 
-        # Validate ticket is unused and not expired
-        if ticket.used:
-            await websocket.close(code=4003, reason="Ticket already used")
-            return
-
-        if ticket.expires_at < datetime.utcnow():
+        # Validate ticket is for this agent and not expired
+        ticket_exp = ticket.expires_at
+        if ticket_exp and ticket_exp.tzinfo is None:
+            ticket_exp = ticket_exp.replace(tzinfo=timezone.utc)
+        if ticket_exp < datetime.now(timezone.utc):
             await websocket.close(code=4003, reason="Ticket expired")
             return
 
-        # Validate ticket is for this agent
         if ticket.agent_id != agent_id:
             await websocket.close(code=4003, reason="Ticket not valid for this agent")
             return
 
-        # Mark ticket as used immediately (single-use)
-        ticket.used = True
+        # Atomically mark ticket as used (prevents concurrent reuse)
+        from sqlalchemy import update as sa_update
+        rows = db.execute(
+            sa_update(WebSocketTicket)
+            .where(WebSocketTicket.id == ticket.id)
+            .where(WebSocketTicket.used == False)
+            .values(used=True)
+        ).rowcount
         db.commit()
+        if rows == 0:
+            await websocket.close(code=4003, reason="Ticket already used")
+            return
 
         # Use cached fields from the ticket
         token_name = ticket.token_name
@@ -178,7 +188,10 @@ async def terminal_websocket(
         if ws_online is not None:
             is_ws_online = ws_online
         else:
-            is_ws_online = agent.last_heartbeat and (datetime.utcnow() - agent.last_heartbeat).total_seconds() < 60
+            ws_hb = agent.last_heartbeat
+            if ws_hb and ws_hb.tzinfo is None:
+                ws_hb = ws_hb.replace(tzinfo=timezone.utc)
+            is_ws_online = ws_hb and (datetime.now(timezone.utc) - ws_hb).total_seconds() < 60
         if not is_ws_online:
             await websocket.close(code=4004, reason="Agent is offline")
             return
@@ -211,7 +224,7 @@ async def terminal_websocket(
         db.add(log)
         db.commit()
 
-        started_at = datetime.utcnow()
+        started_at = datetime.now(timezone.utc)
     finally:
         db.close()
 
@@ -265,7 +278,7 @@ async def terminal_websocket(
 
     finally:
         # --- Cleanup phase: open new DB session to update records ---
-        ended_at = datetime.utcnow()
+        ended_at = datetime.now(timezone.utc)
         duration = int((ended_at - started_at).total_seconds()) if started_at else 0
 
         db = SessionLocal()
@@ -300,12 +313,13 @@ async def terminal_websocket(
             db.close()
 
 
-@router.get("/api/v1/terminal/sessions", response_model=List[TerminalSessionResponse])
+@router.get("/api/v1/terminal/sessions")
 @limiter.limit("60/minute")
 async def list_terminal_sessions(
     request: Request,
     agent_id: Optional[str] = None,
     limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     token_info: TokenInfo = Depends(require_admin_role)
 ):
@@ -324,4 +338,6 @@ async def list_terminal_sessions(
             raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
         query = query.filter(TerminalSession.tenant_id == token_info.tenant_id)
 
-    return query.limit(limit).all()
+    total = query.count()
+    items = query.offset(offset).limit(limit).all()
+    return {"items": items, "total": total, "limit": limit, "offset": offset}

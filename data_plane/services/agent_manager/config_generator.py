@@ -69,6 +69,15 @@ class ConfigGenerator:
             'burst_size': 20
         })
 
+    def get_circuit_breaker_defaults(self) -> dict:
+        """Get default circuit breaker config."""
+        return self.config.get('circuit_breakers', {
+            'max_connections': 1000,
+            'max_pending_requests': 1000,
+            'max_requests': 1000,
+            'max_retries': 3,
+        })
+
     # =========================================================================
     # CoreDNS Generation
     # =========================================================================
@@ -334,6 +343,7 @@ class ConfigGenerator:
 
     def _generate_cluster(self, name: str, host: str, port: int = 443) -> dict:
         """Generate Envoy cluster config."""
+        cb = self.get_circuit_breaker_defaults()
         return {
             'name': name,
             'type': 'LOGICAL_DNS',
@@ -342,10 +352,10 @@ class ConfigGenerator:
             'circuit_breakers': {
                 'thresholds': [{
                     'priority': 'DEFAULT',
-                    'max_connections': 100,
-                    'max_pending_requests': 100,
-                    'max_requests': 100,
-                    'max_retries': 3
+                    'max_connections': cb.get('max_connections', 1000),
+                    'max_pending_requests': cb.get('max_pending_requests', 1000),
+                    'max_requests': cb.get('max_requests', 1000),
+                    'max_retries': cb.get('max_retries', 3),
                 }]
             },
             'load_assignment': {
@@ -488,18 +498,39 @@ class ConfigGenerator:
         }
 
     def _build_lua_filter(self, default_rate_limit: dict) -> dict:
-        """Build Lua filter for credential injection and rate limiting."""
-        lua_code = self._generate_lua_code(default_rate_limit)
+        """Build Lua filter referencing external filter.lua file."""
         return {
             'name': 'envoy.filters.http.lua',
             'typed_config': {
                 '@type': 'type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua',
-                'inline_code': lua_code
+                'default_source_code': {
+                    'filename': '/etc/envoy/filter.lua'
+                }
             }
         }
 
-    def _generate_lua_code(self, default_rate_limit: dict) -> str:
-        """Generate Lua code for credential injection and rate limiting."""
+    def _escape_lua_string(self, s: str) -> str:
+        """Escape a string for safe inclusion in a Lua string literal.
+
+        Prevents Lua injection by escaping backslashes, double quotes,
+        and control characters.
+        """
+        s = s.replace('\\', '\\\\')
+        s = s.replace('"', '\\"')
+        s = s.replace('\n', '\\n')
+        s = s.replace('\r', '\\r')
+        s = s.replace('\0', '')
+        return s
+
+    def generate_lua_filter(self) -> str:
+        """Generate Lua filter code from cagent.yaml config.
+
+        Builds a standalone Lua file with static config tables baked in
+        and the full filter logic (matching, rate limiting, credential
+        injection, DNS tunneling detection, egress tracking).
+        """
+        default_rate_limit = self.get_default_rate_limit()
+
         # Build credential map from config
         credentials = {}
         rate_limits = {}
@@ -527,184 +558,412 @@ class ConfigGenerator:
             if alias:
                 alias_map[f"{alias}.devbox.local"] = domain
 
-        # Generate Lua code
-        return f'''
--- =======================================================================
--- Auto-generated Lua filter from cagent.yaml
--- Generated: {datetime.utcnow().isoformat()}Z
--- =======================================================================
+        # Build Lua table literals with proper escaping
+        creds_lua = self._lua_table(credentials)
+        rate_limits_lua = self._lua_table(rate_limits)
+        alias_map_lua = self._lua_table(alias_map)
+        default_rpm = int(default_rate_limit.get('requests_per_minute', 120))
+        default_burst = int(default_rate_limit.get('burst_size', 20))
 
--- Configuration
-local DATAPLANE_MODE = os.getenv("DATAPLANE_MODE") or "standalone"
-local API_TOKEN = os.getenv("CONTROL_PLANE_TOKEN") or ""
-local CACHE_TTL_SECONDS = 300
-local CP_FAILURE_BACKOFF = 30
+        lines = [
+            '-- =======================================================================',
+            '-- Auto-generated Lua filter from cagent.yaml',
+            f'-- Generated: {datetime.utcnow().isoformat()}Z',
+            '-- DO NOT EDIT - changes will be overwritten by agent-manager',
+            '-- =======================================================================',
+            '',
+            '-- Configuration',
+            'local DATAPLANE_MODE = os.getenv("DATAPLANE_MODE") or "standalone"',
+            'local API_TOKEN = os.getenv("CONTROL_PLANE_TOKEN") or ""',
+            'local CACHE_TTL_SECONDS = 300',
+            'local CP_FAILURE_BACKOFF = 30',
+            'local DEFAULT_EGRESS_LIMIT = 100 * 1024 * 1024  -- 100MB default',
+            'local EGRESS_WINDOW_SECONDS = 3600',
+            '',
+            '-- Caches',
+            'local domain_policy_cache = {}',
+            'local token_buckets = {}',
+            'local egress_bytes = {}',
+            'local cp_available = true',
+            'local cp_last_failure = 0',
+            '',
+            '-- Static config from cagent.yaml',
+            f'local static_credentials = {creds_lua}',
+            f'local static_rate_limits = {rate_limits_lua}',
+            f'local alias_map = {alias_map_lua}',
+            '',
+            f'local default_rate_limit = {{requests_per_minute = {default_rpm}, burst_size = {default_burst}}}',
+            '',
+            '-- =======================================================================',
+            '-- Utility Functions',
+            '-- =======================================================================',
+            '',
+            'function clean_host(host)',
+            '  return string.match(host, "^([^:]+)") or host',
+            'end',
+            '',
+            'function is_devbox_local(host)',
+            '  local host_clean = clean_host(host)',
+            '  return string.match(host_clean, "%.devbox%.local$") ~= nil',
+            'end',
+            '',
+            'function get_real_domain(host)',
+            '  local host_clean = clean_host(host)',
+            '  return alias_map[host_clean] or host_clean',
+            'end',
+            '',
+            'function url_encode(str)',
+            '  if str then',
+            '    str = string.gsub(str, "([^%w%-%.%_%~])", function(c)',
+            '      return string.format("%%%02X", string.byte(c))',
+            '    end)',
+            '  end',
+            '  return str',
+            'end',
+            '',
+            'function detect_dns_tunneling(host)',
+            '  local parts = {}',
+            '  for part in string.gmatch(host, "[^%.]+") do',
+            '    table.insert(parts, part)',
+            '  end',
+            '  for _, part in ipairs(parts) do',
+            '    if string.len(part) > 63 then',
+            '      return true, "Subdomain exceeds 63 characters"',
+            '    end',
+            '  end',
+            '  if string.len(host) > 100 then',
+            '    return true, "Hostname unusually long"',
+            '  end',
+            '  if #parts > 6 then',
+            '    return true, "Excessive subdomain depth"',
+            '  end',
+            '  local suspicious_labels = 0',
+            '  for _, part in ipairs(parts) do',
+            '    if string.len(part) > 20 and string.match(part, "^[%x%-]+$") then',
+            '      suspicious_labels = suspicious_labels + 1',
+            '    end',
+            '  end',
+            '  if suspicious_labels >= 2 then',
+            '    return true, "Multiple hex-encoded subdomain labels"',
+            '  end',
+            '  return false, nil',
+            'end',
+            '',
+            'function should_contact_cp()',
+            '  if DATAPLANE_MODE == "standalone" then return false end',
+            '  if API_TOKEN == "" then return false end',
+            '  if not cp_available and (os.time() - cp_last_failure) < CP_FAILURE_BACKOFF then',
+            '    return false',
+            '  end',
+            '  return true',
+            'end',
+            '',
+            'function mark_cp_failure()',
+            '  cp_available = false',
+            '  cp_last_failure = os.time()',
+            'end',
+            '',
+            'function mark_cp_success()',
+            '  cp_available = true',
+            'end',
+            '',
+            '-- =======================================================================',
+            '-- Wildcard Domain Matching',
+            '-- =======================================================================',
+            '',
+            'function match_domain_wildcard(domain, tbl)',
+            '  local exact = tbl[domain]',
+            '  if exact ~= nil then return exact end',
+            '  for pattern, value in pairs(tbl) do',
+            '    if string.sub(pattern, 1, 2) == "*." then',
+            '      local suffix = string.sub(pattern, 2)',
+            '      if string.sub(domain, -string.len(suffix)) == suffix then',
+            '        return value',
+            '      end',
+            '    end',
+            '  end',
+            '  return nil',
+            'end',
+            '',
+            '-- =======================================================================',
+            '-- Domain Policy',
+            '-- =======================================================================',
+            '',
+            'function get_domain_policy(request_handle, domain)',
+            '  local host_clean = clean_host(domain)',
+            '  local cached = domain_policy_cache[host_clean]',
+            '  if cached and cached.expires_at > os.time() then',
+            '    return cached.policy',
+            '  end',
+            '  local policy = nil',
+            '  if should_contact_cp() then',
+            '    local headers, body = request_handle:httpCall(',
+            '      "control_plane_api",',
+            '      {[":method"] = "GET",',
+            '       [":path"] = "/api/v1/domain-policies/for-domain?domain=" .. url_encode(host_clean),',
+            '       [":authority"] = "backend",',
+            '       ["authorization"] = "Bearer " .. API_TOKEN},',
+            '      "", 5000, false)',
+            '    if body and string.len(body) > 0 then',
+            '      mark_cp_success()',
+            '      policy = parse_domain_policy_response(body)',
+            '    else',
+            '      mark_cp_failure()',
+            '    end',
+            '  end',
+            '  if not policy then',
+            '    policy = build_static_policy(host_clean)',
+            '  elseif not policy.credential then',
+            '    local static = build_static_policy(host_clean)',
+            '    if static.credential then',
+            '      policy.credential = static.credential',
+            '      policy.target_domain = static.target_domain',
+            '      policy.matched = true',
+            '    end',
+            '  end',
+            '  domain_policy_cache[host_clean] = {policy = policy, expires_at = os.time() + CACHE_TTL_SECONDS}',
+            '  return policy',
+            'end',
+            '',
+            'function parse_domain_policy_response(body)',
+            '  if not body or body == "" then return nil end',
+            '  local policy = {',
+            '    matched = string.match(body, \'"matched"%s*:%s*true\') ~= nil,',
+            '    allowed_paths = {},',
+            '    requests_per_minute = tonumber(string.match(body, \'"requests_per_minute"%s*:%s*(%d+)\')) or 120,',
+            '    burst_size = tonumber(string.match(body, \'"burst_size"%s*:%s*(%d+)\')) or 20,',
+            '    bytes_per_hour = tonumber(string.match(body, \'"bytes_per_hour"%s*:%s*(%d+)\')) or DEFAULT_EGRESS_LIMIT,',
+            '    credential = nil, target_domain = nil',
+            '  }',
+            '  local paths_str = string.match(body, \'"allowed_paths"%s*:%s*%[([^%]]*)%]\')',
+            '  if paths_str then',
+            '    for path in string.gmatch(paths_str, \'"([^"]+)"\') do',
+            '      table.insert(policy.allowed_paths, path)',
+            '    end',
+            '  end',
+            '  local cred_header = string.match(body, \'"header_name"%s*:%s*"([^"]*)"\')',
+            '  local cred_value = string.match(body, \'"header_value"%s*:%s*"([^"]*)"\')',
+            '  local target = string.match(body, \'"target_domain"%s*:%s*"([^"]*)"\')',
+            '  if cred_header and cred_value then',
+            '    policy.credential = {header_name = cred_header, header_value = cred_value}',
+            '    policy.target_domain = target',
+            '  end',
+            '  local alias = string.match(body, \'"alias"%s*:%s*"([^"]*)"\')',
+            '  if alias then policy.alias = alias end',
+            '  return policy',
+            'end',
+            '',
+            'function build_static_policy(domain)',
+            '  local policy = {',
+            '    matched = false, allowed_paths = {},',
+            '    requests_per_minute = 120, burst_size = 20,',
+            '    bytes_per_hour = DEFAULT_EGRESS_LIMIT,',
+            '    credential = nil, target_domain = nil',
+            '  }',
+            '  local rl = match_domain_wildcard(domain, static_rate_limits) or default_rate_limit',
+            '  if rl then',
+            '    policy.requests_per_minute = rl.requests_per_minute or 120',
+            '    policy.burst_size = rl.burst_size or 20',
+            '    policy.matched = true',
+            '  end',
+            '  local lookup_domain = alias_map[domain] or domain',
+            '  local cred = match_domain_wildcard(lookup_domain, static_credentials)',
+            '  if cred then',
+            '    policy.credential = {header_name = cred.header_name, header_value = cred.header_value}',
+            '    policy.target_domain = lookup_domain',
+            '    policy.matched = true',
+            '  end',
+            '  return policy',
+            'end',
+            '',
+            '-- =======================================================================',
+            '-- Path Filtering',
+            '-- =======================================================================',
+            '',
+            'function match_path_pattern(pattern, path)',
+            '  if string.sub(pattern, -2) == "/*" then',
+            '    local prefix = string.sub(pattern, 1, -2)',
+            '    return string.sub(path, 1, string.len(prefix)) == prefix',
+            '  elseif string.sub(pattern, -1) == "*" then',
+            '    local prefix = string.sub(pattern, 1, -2)',
+            '    return string.sub(path, 1, string.len(prefix)) == prefix',
+            '  else',
+            '    return path == pattern',
+            '  end',
+            'end',
+            '',
+            'function is_path_allowed(policy, path)',
+            '  if not policy.allowed_paths or #policy.allowed_paths == 0 then',
+            '    return true, "no_restrictions"',
+            '  end',
+            '  for _, pattern in ipairs(policy.allowed_paths) do',
+            '    if match_path_pattern(pattern, path) then',
+            '      return true, pattern',
+            '    end',
+            '  end',
+            '  return false, "path_not_in_allowlist"',
+            'end',
+            '',
+            '-- =======================================================================',
+            '-- Rate Limiting & Egress',
+            '-- =======================================================================',
+            '',
+            'function check_rate_limit_with_config(request_handle, domain, rpm, burst)',
+            '  local host_clean = clean_host(domain)',
+            '  local now = os.time()',
+            '  local bucket = token_buckets[host_clean]',
+            '  if not bucket then',
+            '    bucket = {tokens = burst, last_refill = now}',
+            '    token_buckets[host_clean] = bucket',
+            '  end',
+            '  local elapsed = now - bucket.last_refill',
+            '  local new_tokens = elapsed * (rpm / 60.0)',
+            '  bucket.tokens = math.min(burst, bucket.tokens + new_tokens)',
+            '  bucket.last_refill = now',
+            '  if bucket.tokens >= 1 then',
+            '    bucket.tokens = bucket.tokens - 1',
+            '    return true',
+            '  end',
+            '  request_handle:logWarn(string.format("Rate limit exceeded for %s (limit: %d rpm)", host_clean, rpm))',
+            '  return false',
+            'end',
+            '',
+            'function check_egress_limit_with_config(request_handle, domain, bytes_limit)',
+            '  local host_clean = clean_host(domain)',
+            '  local now = os.time()',
+            '  local tracker = egress_bytes[host_clean]',
+            '  if not tracker then',
+            '    tracker = {bytes = 0, window_start = now}',
+            '    egress_bytes[host_clean] = tracker',
+            '  end',
+            '  if (now - tracker.window_start) >= EGRESS_WINDOW_SECONDS then',
+            '    tracker.bytes = 0',
+            '    tracker.window_start = now',
+            '  end',
+            '  return tracker.bytes < bytes_limit, tracker.bytes',
+            'end',
+            '',
+            'function record_egress_bytes(response_handle, domain, bytes)',
+            '  local host_clean = clean_host(domain)',
+            '  local now = os.time()',
+            '  local tracker = egress_bytes[host_clean]',
+            '  if not tracker then',
+            '    tracker = {bytes = 0, window_start = now}',
+            '    egress_bytes[host_clean] = tracker',
+            '  end',
+            '  if (now - tracker.window_start) >= EGRESS_WINDOW_SECONDS then',
+            '    tracker.bytes = 0',
+            '    tracker.window_start = now',
+            '  end',
+            '  tracker.bytes = tracker.bytes + bytes',
+            'end',
+            '',
+            '-- =======================================================================',
+            '-- Request / Response Handlers',
+            '-- =======================================================================',
+            '',
+            'function envoy_on_request(request_handle)',
+            '  local host = request_handle:headers():get(":authority") or ""',
+            '  local host_clean = clean_host(host)',
+            '  local credential_injected = "false"',
+            '  local rate_limited = "false"',
+            '  local devbox_local = is_devbox_local(host)',
+            '',
+            '  if not devbox_local then',
+            '    local suspicious, reason = detect_dns_tunneling(host)',
+            '    if suspicious then',
+            '      request_handle:logWarn("DNS tunneling blocked: " .. host .. " - " .. reason)',
+            '      request_handle:respond({[":status"] = "403"}, "Blocked: suspicious hostname")',
+            '      return',
+            '    end',
+            '  end',
+            '',
+            '  local policy = get_domain_policy(request_handle, host_clean)',
+            '  local real_domain = host_clean',
+            '  if policy and policy.target_domain then',
+            '    real_domain = policy.target_domain',
+            '  end',
+            '',
+            '  local rpm = policy and policy.requests_per_minute or 120',
+            '  local burst = policy and policy.burst_size or 20',
+            '  if not check_rate_limit_with_config(request_handle, real_domain, rpm, burst) then',
+            '    rate_limited = "true"',
+            '    request_handle:headers():add("X-Rate-Limited", rate_limited)',
+            '    request_handle:respond({[":status"] = "429", ["retry-after"] = "60"},',
+            '      \'{"error": "rate_limit_exceeded", "message": "Too many requests to this domain"}\')',
+            '    return',
+            '  end',
+            '',
+            '  local request_path = request_handle:headers():get(":path") or "/"',
+            '  local path_only = string.match(request_path, "^([^?]+)") or request_path',
+            '  local path_allowed, path_reason = is_path_allowed(policy, path_only)',
+            '  if not path_allowed then',
+            '    request_handle:logWarn(string.format("Path not allowed: %s%s (reason: %s)", real_domain, path_only, path_reason))',
+            '    request_handle:respond({[":status"] = "403"},',
+            '      \'{"error": "path_not_allowed", "message": "This path is not in the allowlist for this domain"}\')',
+            '    return',
+            '  end',
+            '',
+            '  local bytes_limit = policy and policy.bytes_per_hour or DEFAULT_EGRESS_LIMIT',
+            '  local egress_allowed, current_bytes = check_egress_limit_with_config(request_handle, real_domain, bytes_limit)',
+            '  if not egress_allowed then',
+            '    request_handle:logWarn(string.format("Egress limit exceeded for %s: %d / %d bytes", real_domain, current_bytes, bytes_limit))',
+            '    request_handle:respond({[":status"] = "429", ["retry-after"] = "3600"},',
+            '      \'{"error": "egress_limit_exceeded", "message": "Hourly egress limit exceeded for this domain"}\')',
+            '    return',
+            '  end',
+            '',
+            '  request_handle:streamInfo():dynamicMetadata():set("envoy.filters.http.lua", "request_domain", real_domain)',
+            '',
+            '  if policy and policy.credential and policy.credential.header_name and policy.credential.header_value then',
+            '    request_handle:headers():remove(policy.credential.header_name)',
+            '    request_handle:headers():add(policy.credential.header_name, policy.credential.header_value)',
+            '    credential_injected = "true"',
+            '    request_handle:logInfo(string.format("Injected credential for %s (via %s): %s", real_domain, host, policy.credential.header_name))',
+            '  end',
+            '',
+            '  request_handle:headers():add("X-Credential-Injected", credential_injected)',
+            '  request_handle:headers():add("X-Rate-Limited", rate_limited)',
+            '  request_handle:headers():add("X-Real-Domain", real_domain)',
+            '  request_handle:headers():add("X-Devbox-Timestamp", os.date("!%Y-%m-%dT%H:%M:%SZ"))',
+            '',
+            '  if devbox_local then',
+            '    request_handle:logInfo(string.format("Devbox proxy: %s -> %s (credential_injected=%s)", host, real_domain, credential_injected))',
+            '  end',
+            'end',
+            '',
+            'function envoy_on_response(response_handle)',
+            '  local status = response_handle:headers():get(":status")',
+            '  local content_length_str = response_handle:headers():get("content-length") or "0"',
+            '  local content_length = tonumber(content_length_str) or 0',
+            '  local metadata = response_handle:streamInfo():dynamicMetadata():get("envoy.filters.http.lua")',
+            '  local domain = metadata and metadata["request_domain"] or nil',
+            '  if domain and content_length > 0 then',
+            '    record_egress_bytes(response_handle, domain, content_length)',
+            '  end',
+            '  response_handle:logInfo(string.format("RESPONSE: status=%s content_length=%s domain=%s", status, content_length_str, domain or "unknown"))',
+            'end',
+        ]
 
--- Caches
-local credential_cache = {{}}
-local rate_limit_cache = {{}}
-local token_buckets = {{}}
-local cp_available = true
-local cp_last_failure = 0
-
--- Static credentials from cagent.yaml
-local static_credentials = {self._lua_table(credentials)}
-
--- Static rate limits from cagent.yaml
-local static_rate_limits = {self._lua_table(rate_limits)}
-
--- Alias map: devbox.local -> real domain
-local alias_map = {self._lua_table(alias_map)}
-
--- Default rate limit
-local default_rate_limit = {{
-  requests_per_minute = {default_rate_limit.get('requests_per_minute', 120)},
-  burst_size = {default_rate_limit.get('burst_size', 20)}
-}}
-
-function clean_host(host)
-  return string.match(host, "^([^:]+)") or host
-end
-
-function is_devbox_local(host)
-  local host_clean = clean_host(host)
-  return string.match(host_clean, "%.devbox%.local$") ~= nil
-end
-
-function get_real_domain(host)
-  local host_clean = clean_host(host)
-  return alias_map[host_clean] or host_clean
-end
-
-function detect_dns_tunneling(host)
-  if string.len(host) > 100 then
-    return true, "Hostname too long"
-  end
-  for part in string.gmatch(host, "[^%.]+") do
-    if string.len(part) > 63 then
-      return true, "Subdomain too long"
-    end
-  end
-  return false, nil
-end
-
-function get_credential(domain)
-  local cred = static_credentials[domain]
-  if cred then return cred end
-  -- Try wildcard
-  for pattern, c in pairs(static_credentials) do
-    if string.sub(pattern, 1, 2) == "*." then
-      local suffix = string.sub(pattern, 2)
-      if string.sub(domain, -string.len(suffix)) == suffix then
-        return c
-      end
-    end
-  end
-  return nil
-end
-
-function get_rate_limit(domain)
-  local rl = static_rate_limits[domain]
-  if rl then return rl end
-  -- Try wildcard
-  for pattern, r in pairs(static_rate_limits) do
-    if string.sub(pattern, 1, 2) == "*." then
-      local suffix = string.sub(pattern, 2)
-      if string.sub(domain, -string.len(suffix)) == suffix then
-        return r
-      end
-    end
-  end
-  return default_rate_limit
-end
-
-function check_rate_limit(domain)
-  local config = get_rate_limit(domain)
-  local now = os.time()
-  local bucket = token_buckets[domain]
-
-  if not bucket then
-    bucket = {{ tokens = config.burst_size, last_refill = now }}
-    token_buckets[domain] = bucket
-  end
-
-  local elapsed = now - bucket.last_refill
-  local tokens_per_second = config.requests_per_minute / 60.0
-  local new_tokens = elapsed * tokens_per_second
-  bucket.tokens = math.min(config.burst_size, bucket.tokens + new_tokens)
-  bucket.last_refill = now
-
-  if bucket.tokens >= 1 then
-    bucket.tokens = bucket.tokens - 1
-    return true
-  end
-  return false
-end
-
-function envoy_on_request(request_handle)
-  local host = request_handle:headers():get(":authority") or ""
-  local host_clean = clean_host(host)
-  local credential_injected = "false"
-  local rate_limited = "false"
-
-  -- DNS tunneling detection
-  if not is_devbox_local(host) then
-    local suspicious, reason = detect_dns_tunneling(host)
-    if suspicious then
-      request_handle:logWarn("DNS tunneling blocked: " .. host .. " - " .. reason)
-      request_handle:respond({{[":status"] = "403"}}, "Blocked: suspicious hostname")
-      return
-    end
-  end
-
-  -- Get real domain for devbox.local aliases
-  local real_domain = get_real_domain(host_clean)
-
-  -- Rate limiting
-  if not check_rate_limit(real_domain) then
-    rate_limited = "true"
-    request_handle:headers():add("X-Rate-Limited", rate_limited)
-    request_handle:respond(
-      {{[":status"] = "429", ["retry-after"] = "60"}},
-      '{{"error": "rate_limit_exceeded"}}'
-    )
-    return
-  end
-
-  -- Credential injection
-  local cred = get_credential(real_domain)
-  if cred and cred.header_name and cred.header_value then
-    request_handle:headers():remove(cred.header_name)
-    request_handle:headers():add(cred.header_name, cred.header_value)
-    credential_injected = "true"
-  end
-
-  -- Add tracking headers
-  request_handle:headers():add("X-Credential-Injected", credential_injected)
-  request_handle:headers():add("X-Rate-Limited", rate_limited)
-  request_handle:headers():add("X-Real-Domain", real_domain)
-end
-
-function envoy_on_response(response_handle)
-  -- Response logging if needed
-end
-'''
+        return '\n'.join(lines) + '\n'
 
     def _lua_table(self, d: dict) -> str:
-        """Convert Python dict to Lua table literal."""
+        """Convert Python dict to Lua table literal with proper escaping."""
         if not d:
             return '{}'
 
         items = []
         for k, v in d.items():
+            escaped_key = self._escape_lua_string(str(k))
             if isinstance(v, dict):
-                items.append(f'["{k}"] = {self._lua_table(v)}')
+                items.append(f'["{escaped_key}"] = {self._lua_table(v)}')
             elif isinstance(v, str):
-                items.append(f'["{k}"] = "{v}"')
-            elif isinstance(v, (int, float)):
-                items.append(f'["{k}"] = {v}')
+                escaped_val = self._escape_lua_string(v)
+                items.append(f'["{escaped_key}"] = "{escaped_val}"')
             elif isinstance(v, bool):
-                items.append(f'["{k}"] = {"true" if v else "false"}')
+                items.append(f'["{escaped_key}"] = {"true" if v else "false"}')
+            elif isinstance(v, (int, float)):
+                items.append(f'["{escaped_key}"] = {v}')
 
         return '{' + ', '.join(items) + '}'
 
@@ -748,11 +1007,25 @@ end
             logger.error(f"Failed to write Envoy config: {e}")
             return False
 
-    def generate_all(self, coredns_path: str, envoy_path: str) -> bool:
-        """Generate both configs."""
+    def write_lua_filter(self, output_path: str) -> bool:
+        """Write generated Lua filter file."""
+        try:
+            content = self.generate_lua_filter()
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text(content)
+            logger.info(f"Wrote Lua filter to {output_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to write Lua filter: {e}")
+            return False
+
+    def generate_all(self, coredns_path: str, envoy_path: str, lua_path: str = None) -> bool:
+        """Generate all configs."""
         success = True
         success = self.write_corefile(coredns_path) and success
         success = self.write_envoy_config(envoy_path) and success
+        if lua_path:
+            success = self.write_lua_filter(lua_path) and success
         return success
 
 

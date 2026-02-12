@@ -54,4 +54,4 @@ class TestTerminalTicketAndSessions:
         """Should list terminal sessions."""
         response = client.get("/api/v1/terminal/sessions", headers=auth_headers)
         assert response.status_code == 200
-        assert isinstance(response.json(), list)
+        assert isinstance(response.json()["items"], list)

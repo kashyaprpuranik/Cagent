@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -36,7 +36,7 @@ async def health_check(db: Session = Depends(get_db)):
             content={
                 "status": "unhealthy",
                 "database": db_status,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "version": _VERSION,
                 "uptime": int(time.monotonic() - _START_TIME),
             },
@@ -44,7 +44,7 @@ async def health_check(db: Session = Depends(get_db)):
     return {
         "status": "healthy",
         "database": db_status,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": _VERSION,
         "uptime": int(time.monotonic() - _START_TIME),
     }

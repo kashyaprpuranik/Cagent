@@ -1,12 +1,15 @@
 """
-Agent Manager - Polls control plane for commands, manages agent container.
+Agent Manager - Polls control plane for commands, manages agent containers.
 
 Runs as a background service that:
-1. Sends heartbeat to control plane every 30s with agent status
-2. Receives any pending commands (wipe, restart, stop, start)
-3. Executes commands and reports results on next heartbeat
-4. Syncs config from control plane OR generates from cagent.yaml
-5. Regenerates CoreDNS and Envoy configs when allowlist changes
+1. Discovers agent containers by Docker label (cagent.role=agent)
+2. Sends heartbeat to control plane every 30s per agent with status
+3. Receives any pending commands (wipe, restart, stop, start)
+4. Executes commands and reports results on next heartbeat
+5. Syncs config from control plane OR generates from cagent.yaml
+6. Regenerates CoreDNS and Envoy configs when allowlist changes
+
+All agent containers share the same policy, DNS filter, and HTTP proxy.
 
 Modes:
 - standalone: Uses cagent.yaml as single source of truth
@@ -22,8 +25,10 @@ import json
 import hashlib
 import signal
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pathlib import Path
 
 import docker
@@ -43,17 +48,21 @@ logger = logging.getLogger(__name__)
 DATAPLANE_MODE = os.environ.get("DATAPLANE_MODE", "standalone")  # 'standalone' or 'connected'
 CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://backend:8000")
 CONTROL_PLANE_TOKEN = os.environ.get("CONTROL_PLANE_TOKEN", "")
-AGENT_CONTAINER_NAME = "agent"
-AGENT_WORKSPACE_VOLUME = "data_plane_agent-workspace"
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "30"))
+
+# Agent discovery: label-based with fallback to fixed name
+AGENT_LABEL = "cagent.role=agent"
+AGENT_CONTAINER_FALLBACK = "agent"
 
 # Config paths
 CAGENT_CONFIG_PATH = os.environ.get("CAGENT_CONFIG_PATH", "/etc/cagent/cagent.yaml")
 COREDNS_COREFILE_PATH = os.environ.get("COREDNS_COREFILE_PATH", "/etc/coredns/Corefile")
 ENVOY_CONFIG_PATH = os.environ.get("ENVOY_CONFIG_PATH", "/etc/envoy/envoy.yaml")
+ENVOY_LUA_PATH = os.environ.get("ENVOY_LUA_PATH", "/etc/envoy/filter.lua")
 
 # Sync configuration
 CONFIG_SYNC_INTERVAL = int(os.environ.get("CONFIG_SYNC_INTERVAL", "300"))  # 5 minutes
+MAX_HEARTBEAT_WORKERS = int(os.environ.get("HEARTBEAT_MAX_WORKERS", "20"))
 
 # Config generator instance
 config_generator = ConfigGenerator(CAGENT_CONFIG_PATH)
@@ -61,40 +70,69 @@ config_generator = ConfigGenerator(CAGENT_CONFIG_PATH)
 # Docker client
 docker_client = docker.from_env()
 
-# Track last command result to report on next heartbeat
-last_command_result = {
-    "command": None,
-    "result": None,
-    "message": None
-}
+# Thread-safe command result tracking (written from ThreadPoolExecutor workers,
+# read from the heartbeat sender on the next cycle).
+_command_results_lock = threading.Lock()
+_last_command_results: dict = {}
 
 
-def get_agent_container():
-    """Get the agent container by name."""
+# ---------------------------------------------------------------------------
+# Container discovery
+# ---------------------------------------------------------------------------
+
+def discover_agent_containers() -> List:
+    """Discover agent containers by the ``cagent.role=agent`` label.
+
+    Falls back to looking up a container named ``agent`` when no labelled
+    containers are found (backward compat with unlabelled setups).
+    """
     try:
-        return docker_client.containers.get(AGENT_CONTAINER_NAME)
-    except docker.errors.NotFound:
-        return None
+        containers = docker_client.containers.list(
+            all=True,
+            filters={"label": AGENT_LABEL},
+        )
+        if containers:
+            return containers
     except docker.errors.APIError as e:
-        logger.error(f"Docker API error: {e}")
-        return None
+        logger.warning(f"Label-based discovery failed: {e}")
+
+    # Fallback: try the fixed name
+    try:
+        container = docker_client.containers.get(AGENT_CONTAINER_FALLBACK)
+        return [container]
+    except docker.errors.NotFound:
+        return []
+    except docker.errors.APIError as e:
+        logger.error(f"Docker API error during fallback discovery: {e}")
+        return []
 
 
-def get_agent_status() -> dict:
-    """Get current agent container status."""
-    container = get_agent_container()
+def _workspace_volume_for(container) -> Optional[str]:
+    """Derive the workspace volume name for a container from its mounts."""
+    for mount in container.attrs.get("Mounts", []):
+        if mount.get("Destination") == "/workspace":
+            return mount.get("Name")
+    return None
 
-    if not container:
+
+# ---------------------------------------------------------------------------
+# Status helpers
+# ---------------------------------------------------------------------------
+
+def get_container_status(container) -> dict:
+    """Get status metrics for a single agent container."""
+    try:
+        container.reload()
+    except docker.errors.APIError as e:
+        logger.error(f"Docker API error reloading {container.name}: {e}")
         return {
-            "status": "not_found",
+            "status": "error",
             "container_id": None,
             "uptime_seconds": None,
             "cpu_percent": None,
             "memory_mb": None,
-            "memory_limit_mb": None
+            "memory_limit_mb": None,
         }
-
-    container.reload()
 
     # Calculate uptime
     uptime_seconds = None
@@ -132,7 +170,7 @@ def get_agent_status() -> dict:
             memory_limit_mb = round(memory_limit / (1024 * 1024), 2)
 
         except Exception as e:
-            logger.warning(f"Could not get container stats: {e}")
+            logger.warning(f"Could not get container stats for {container.name}: {e}")
 
     return {
         "status": container.status,
@@ -140,43 +178,36 @@ def get_agent_status() -> dict:
         "uptime_seconds": uptime_seconds,
         "cpu_percent": cpu_percent,
         "memory_mb": memory_mb,
-        "memory_limit_mb": memory_limit_mb
+        "memory_limit_mb": memory_limit_mb,
     }
 
 
-def execute_command(command: str, args: Optional[dict] = None) -> tuple:
-    """Execute a command and return (success, message)."""
-    global last_command_result
+# ---------------------------------------------------------------------------
+# Command execution
+# ---------------------------------------------------------------------------
 
-    logger.info(f"Executing command: {command} with args: {args}")
+def execute_command(command: str, container, args: Optional[dict] = None) -> tuple:
+    """Execute a command on a specific agent container.
+
+    Returns (success: bool, message: str).
+    """
+    name = container.name
+    logger.info(f"Executing command: {command} on {name} with args: {args}")
 
     try:
         if command == "restart":
-            container = get_agent_container()
-            if not container:
-                return False, "Agent container not found"
             container.restart(timeout=10)
-            return True, "Agent container restarted"
+            return True, f"Agent container {name} restarted"
 
         elif command == "stop":
-            container = get_agent_container()
-            if not container:
-                return False, "Agent container not found"
             container.stop(timeout=10)
-            return True, "Agent container stopped"
+            return True, f"Agent container {name} stopped"
 
         elif command == "start":
-            container = get_agent_container()
-            if not container:
-                return False, "Agent container not found"
             container.start()
-            return True, "Agent container started"
+            return True, f"Agent container {name} started"
 
         elif command == "wipe":
-            container = get_agent_container()
-            if not container:
-                return False, "Agent container not found"
-
             wipe_workspace = args.get("wipe_workspace", False) if args else False
 
             # Stop and remove container
@@ -186,29 +217,35 @@ def execute_command(command: str, args: Optional[dict] = None) -> tuple:
 
             # Optionally wipe workspace
             if wipe_workspace:
-                try:
-                    docker_client.containers.run(
-                        "alpine:latest",
-                        command="rm -rf /workspace/*",
-                        volumes={AGENT_WORKSPACE_VOLUME: {"bind": "/workspace", "mode": "rw"}},
-                        remove=True
-                    )
-                    logger.info(f"Cleared workspace volume {AGENT_WORKSPACE_VOLUME}")
-                except Exception as e:
-                    logger.warning(f"Could not wipe workspace: {e}")
+                volume_name = _workspace_volume_for(container)
+                if volume_name:
+                    try:
+                        docker_client.containers.run(
+                            "alpine:latest",
+                            command="rm -rf /workspace/*",
+                            volumes={volume_name: {"bind": "/workspace", "mode": "rw"}},
+                            remove=True,
+                        )
+                        logger.info(f"Cleared workspace volume {volume_name}")
+                    except Exception as e:
+                        logger.warning(f"Could not wipe workspace for {name}: {e}")
 
-            return True, f"Agent wiped (workspace={'wiped' if wipe_workspace else 'preserved'})"
+            return True, f"Agent {name} wiped (workspace={'wiped' if wipe_workspace else 'preserved'})"
 
         else:
             return False, f"Unknown command: {command}"
 
     except docker.errors.APIError as e:
-        logger.error(f"Docker API error executing {command}: {e}")
+        logger.error(f"Docker API error executing {command} on {name}: {e}")
         return False, str(e)
     except Exception as e:
-        logger.error(f"Error executing {command}: {e}")
+        logger.error(f"Error executing {command} on {name}: {e}")
         return False, str(e)
 
+
+# ---------------------------------------------------------------------------
+# Infrastructure restarts (shared across all agents)
+# ---------------------------------------------------------------------------
 
 COREDNS_CONTAINER_NAME = "dns-filter"
 ENVOY_CONTAINER_NAME = "http-proxy"
@@ -244,6 +281,10 @@ def reload_envoy():
         return False
 
 
+# ---------------------------------------------------------------------------
+# Config generation (shared — same Corefile / Envoy config for all agents)
+# ---------------------------------------------------------------------------
+
 def _stable_hash(content: str) -> str:
     """Hash content after stripping auto-generated timestamp lines."""
     stable = "\n".join(
@@ -253,13 +294,22 @@ def _stable_hash(content: str) -> str:
     return hashlib.md5(stable.encode()).hexdigest()
 
 
-# Track last written config hashes to avoid unnecessary restarts
-_last_envoy_hash: Optional[str] = None
-_last_corefile_hash: Optional[str] = None
+class _ConfigState:
+    """Track last-written config hashes to avoid unnecessary restarts.
+
+    Encapsulated in a class instead of bare module globals so there is a
+    single, obvious mutation point and no ``global`` statements needed.
+    """
+    def __init__(self):
+        self.envoy_hash: Optional[str] = None
+        self.corefile_hash: Optional[str] = None
+        self.lua_hash: Optional[str] = None
+
+_config_state = _ConfigState()
 
 
 def regenerate_configs(additional_domains: list = None) -> bool:
-    """Regenerate CoreDNS and Envoy configs from cagent.yaml.
+    """Regenerate CoreDNS, Envoy, and Lua filter configs from cagent.yaml.
 
     Args:
         additional_domains: Extra domains to merge (e.g., from control plane sync)
@@ -267,8 +317,6 @@ def regenerate_configs(additional_domains: list = None) -> bool:
     Returns:
         True if configs were regenerated, False otherwise.
     """
-    global _last_envoy_hash, _last_corefile_hash
-
     try:
         config_changed = config_generator.load_config()
 
@@ -280,24 +328,31 @@ def regenerate_configs(additional_domains: list = None) -> bool:
         corefile_content = config_generator.generate_corefile()
         envoy_config = config_generator.generate_envoy_config()
         envoy_yaml = yaml.dump(envoy_config, default_flow_style=False, sort_keys=False)
+        lua_content = config_generator.generate_lua_filter()
 
         corefile_hash = _stable_hash(corefile_content)
         envoy_hash = _stable_hash(envoy_yaml)
+        lua_hash = _stable_hash(lua_content)
 
-        corefile_changed = corefile_hash != _last_corefile_hash
-        envoy_changed = envoy_hash != _last_envoy_hash
+        corefile_changed = corefile_hash != _config_state.corefile_hash
+        envoy_changed = envoy_hash != _config_state.envoy_hash
+        lua_changed = lua_hash != _config_state.lua_hash
 
         if corefile_changed:
             config_generator.write_corefile(COREDNS_COREFILE_PATH)
             restart_coredns()
-            _last_corefile_hash = corefile_hash
+            _config_state.corefile_hash = corefile_hash
 
-        if envoy_changed:
-            config_generator.write_envoy_config(ENVOY_CONFIG_PATH)
+        if envoy_changed or lua_changed:
+            if envoy_changed:
+                config_generator.write_envoy_config(ENVOY_CONFIG_PATH)
+            if lua_changed:
+                config_generator.write_lua_filter(ENVOY_LUA_PATH)
             reload_envoy()
-            _last_envoy_hash = envoy_hash
+            _config_state.envoy_hash = envoy_hash
+            _config_state.lua_hash = lua_hash
 
-        if corefile_changed or envoy_changed:
+        if corefile_changed or envoy_changed or lua_changed:
             logger.info("Regenerated configs from cagent.yaml")
             return True
         else:
@@ -355,15 +410,21 @@ def sync_config() -> bool:
         return False
 
 
-def send_heartbeat() -> Optional[dict]:
-    """Send heartbeat to control plane, return any pending command."""
-    global last_command_result
+# ---------------------------------------------------------------------------
+# Heartbeat
+# ---------------------------------------------------------------------------
 
+def send_heartbeat(container) -> Optional[dict]:
+    """Send heartbeat for a single agent container to control plane.
+
+    Returns the parsed response (may contain a pending command), or None.
+    """
     if not CONTROL_PLANE_URL or not CONTROL_PLANE_TOKEN:
         logger.warning("Control plane URL or token not configured, skipping heartbeat")
         return None
 
-    status = get_agent_status()
+    name = container.name
+    status = get_container_status(container)
 
     heartbeat = {
         "status": status["status"],
@@ -374,29 +435,31 @@ def send_heartbeat() -> Optional[dict]:
         "memory_limit_mb": status["memory_limit_mb"],
     }
 
-    # Include last command result if any
-    if last_command_result["command"]:
-        heartbeat["last_command"] = last_command_result["command"]
-        heartbeat["last_command_result"] = last_command_result["result"]
-        heartbeat["last_command_message"] = last_command_result["message"]
-        # Clear after sending
-        last_command_result = {"command": None, "result": None, "message": None}
+    # Include last command result for this container if any
+    with _command_results_lock:
+        last_result = _last_command_results.get(name)
+        if last_result and last_result["command"]:
+            heartbeat["last_command"] = last_result["command"]
+            heartbeat["last_command_result"] = last_result["result"]
+            heartbeat["last_command_message"] = last_result["message"]
+            # Clear after sending
+            _last_command_results[name] = {"command": None, "result": None, "message": None}
 
     try:
         response = requests.post(
             f"{CONTROL_PLANE_URL}/api/v1/agent/heartbeat",
             json=heartbeat,
             headers={"Authorization": f"Bearer {CONTROL_PLANE_TOKEN}"},
-            timeout=10
+            timeout=10,
         )
 
         if response.status_code == 200:
             return response.json()
-        elif response.status_code == 401 or response.status_code == 403:
+        elif response.status_code in (401, 403):
             logger.error(f"Authentication failed: {response.status_code}")
             return None
         else:
-            logger.warning(f"Heartbeat failed: {response.status_code} - {response.text}")
+            logger.warning(f"Heartbeat for {name} failed: {response.status_code} - {response.text}")
             return None
 
     except requests.exceptions.RequestException as e:
@@ -404,16 +467,42 @@ def send_heartbeat() -> Optional[dict]:
         return None
 
 
-def main_loop():
-    """Main loop: send heartbeat, execute commands, sync config."""
-    global last_command_result
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
 
+def _heartbeat_and_handle(container):
+    """Send heartbeat for one container and execute any pending command.
+
+    Runs inside a ThreadPoolExecutor — must be thread-safe.
+    """
+    response = send_heartbeat(container)
+    if response and response.get("command"):
+        command = response["command"]
+        cmd_args = response.get("command_args")
+        logger.info(f"Received command for {container.name}: {command}")
+        success, message = execute_command(command, container, cmd_args)
+        with _command_results_lock:
+            _last_command_results[container.name] = {
+                "command": command,
+                "result": "success" if success else "failed",
+                "message": message,
+            }
+        logger.info(
+            f"Command {command} on {container.name} "
+            f"{'succeeded' if success else 'failed'}: {message}"
+        )
+
+
+def main_loop():
+    """Main loop: discover agents, send heartbeats, execute commands, sync config."""
     logger.info("Agent manager starting")
     logger.info(f"  Mode: {DATAPLANE_MODE}")
     logger.info(f"  Config file: {CAGENT_CONFIG_PATH}")
     logger.info(f"  CoreDNS config: {COREDNS_COREFILE_PATH}")
     logger.info(f"  Envoy config: {ENVOY_CONFIG_PATH}")
-    logger.info(f"  Agent container: {AGENT_CONTAINER_NAME}")
+    logger.info(f"  Envoy Lua filter: {ENVOY_LUA_PATH}")
+    logger.info(f"  Agent discovery label: {AGENT_LABEL}")
     logger.info(f"  Config sync interval: {CONFIG_SYNC_INTERVAL}s")
 
     if DATAPLANE_MODE == "connected":
@@ -424,54 +513,54 @@ def main_loop():
     else:
         logger.info("  Running in standalone mode (no control plane sync)")
 
-    # Track time since last config sync
-    heartbeat_count = 0
+    # Log initially discovered agents
+    agents = discover_agent_containers()
+    logger.info(f"  Discovered {len(agents)} agent container(s): {[c.name for c in agents]}")
 
     # Initial config generation from cagent.yaml (always write on startup)
-    global _last_envoy_hash, _last_corefile_hash
     logger.info("Generating initial configs from cagent.yaml...")
     config_generator.load_config()
     config_generator.write_corefile(COREDNS_COREFILE_PATH)
     config_generator.write_envoy_config(ENVOY_CONFIG_PATH)
+    config_generator.write_lua_filter(ENVOY_LUA_PATH)
     restart_coredns()
     reload_envoy()
     # Snapshot current state so regenerate_configs() can detect changes
-    _last_corefile_hash = _stable_hash(config_generator.generate_corefile())
-    _last_envoy_hash = _stable_hash(
+    _config_state.corefile_hash = _stable_hash(config_generator.generate_corefile())
+    _config_state.envoy_hash = _stable_hash(
         yaml.dump(config_generator.generate_envoy_config(), default_flow_style=False, sort_keys=False)
     )
+    _config_state.lua_hash = _stable_hash(config_generator.generate_lua_filter())
     logger.info("Initial config generation complete")
+
+    # Use wall-clock monotonic time for config sync scheduling so that
+    # slow heartbeat cycles (e.g. Docker stats across many containers)
+    # don't cause sync drift.
+    last_sync_time = time.monotonic()
 
     while True:
         try:
-            # In connected mode, send heartbeat and handle commands
+            # Discover agent containers each cycle (handles containers
+            # being added/removed at runtime)
+            agents = discover_agent_containers()
+
+            # In connected mode, send heartbeat and handle commands per agent (concurrent)
             if DATAPLANE_MODE == "connected" and CONTROL_PLANE_TOKEN:
-                response = send_heartbeat()
+                workers = min(MAX_HEARTBEAT_WORKERS, len(agents)) if agents else 1
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {executor.submit(_heartbeat_and_handle, c): c for c in agents}
+                    for f in as_completed(futures):
+                        try:
+                            f.result()
+                        except Exception as exc:
+                            container = futures[f]
+                            logger.error(f"Heartbeat failed for {container.name}: {exc}")
 
-                if response and response.get("command"):
-                    command = response["command"]
-                    args = response.get("command_args")
-
-                    logger.info(f"Received command: {command}")
-
-                    # Execute the command
-                    success, message = execute_command(command, args)
-
-                    # Store result to report on next heartbeat
-                    last_command_result = {
-                        "command": command,
-                        "result": "success" if success else "failed",
-                        "message": message
-                    }
-
-                    logger.info(f"Command {command} {'succeeded' if success else 'failed'}: {message}")
-
-            # Sync config periodically
-            heartbeat_count += 1
-            elapsed_since_sync = heartbeat_count * HEARTBEAT_INTERVAL
-            if elapsed_since_sync >= CONFIG_SYNC_INTERVAL:
+            # Sync config periodically (wall-clock, not heartbeat-count)
+            now = time.monotonic()
+            if (now - last_sync_time) >= CONFIG_SYNC_INTERVAL:
                 sync_config()
-                heartbeat_count = 0
+                last_sync_time = now
 
         except Exception as e:
             logger.error(f"Error in main loop: {e}")

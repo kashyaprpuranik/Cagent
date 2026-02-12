@@ -24,6 +24,26 @@ def pytest_configure(config):
     )
 
 
+AGENT_LABEL = "cagent.role=agent"
+AGENT_CONTAINER_FALLBACK = "agent"
+
+
+def _discover_agent_container_name() -> str:
+    """Discover an agent container by label, falling back to 'agent'."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "label=cagent.role=agent",
+             "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        names = result.stdout.strip().splitlines()
+        if names:
+            return names[0]
+    except Exception:
+        pass
+    return AGENT_CONTAINER_FALLBACK
+
+
 def is_data_plane_running():
     """Check if data plane containers are running."""
     try:
@@ -46,10 +66,17 @@ def data_plane_running():
     return True
 
 
-def exec_in_agent(command: str) -> subprocess.CompletedProcess:
-    """Execute a command in the agent container."""
+@pytest.fixture(scope="module")
+def agent_container_name():
+    """Discover the agent container name (label-based, fallback to 'agent')."""
+    return _discover_agent_container_name()
+
+
+def exec_in_agent(command: str, container_name: str = None) -> subprocess.CompletedProcess:
+    """Execute a command in an agent container (discovered by label)."""
+    name = container_name or _discover_agent_container_name()
     return subprocess.run(
-        ["docker", "exec", "agent", "sh", "-c", command],
+        ["docker", "exec", name, "sh", "-c", command],
         capture_output=True,
         text=True,
         timeout=30
@@ -85,6 +112,59 @@ class TestAgentNetworkIsolation:
         result = exec_in_agent("nc -z -w 2 10.200.2.1 8000 && echo FAIL || echo BLOCKED")
         assert "BLOCKED" in result.stdout, \
             "Agent can reach infra-net (10.200.2.1:8000) — network isolation broken!"
+
+
+@pytest.mark.e2e
+class TestMultiAgentContainers:
+    """Test multi-agent container support (--scale agent-dev=2).
+
+    Verifies that all agent containers are discovered by label,
+    each has proper network isolation, and each is independently functional.
+    """
+
+    def _discover_all(self):
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "label=cagent.role=agent",
+             "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return sorted(result.stdout.strip().splitlines())
+
+    def test_multiple_agents_discovered(self, data_plane_running):
+        """Should discover at least 2 agent containers by label."""
+        names = self._discover_all()
+        assert len(names) >= 2, f"Expected >=2 agent containers, found {len(names)}: {names}"
+
+    def test_all_agents_can_reach_proxy(self, data_plane_running):
+        """Every agent container should reach the Envoy proxy."""
+        for name in self._discover_all():
+            result = exec_in_agent("nc -z 10.200.1.10 8443 && echo OK", container_name=name)
+            assert "OK" in result.stdout, f"{name} cannot reach proxy: {result.stderr}"
+
+    def test_all_agents_can_reach_dns(self, data_plane_running):
+        """Every agent container should reach the DNS filter."""
+        for name in self._discover_all():
+            result = exec_in_agent("nc -z 10.200.1.5 53 && echo OK", container_name=name)
+            assert "OK" in result.stdout, f"{name} cannot reach DNS: {result.stderr}"
+
+    def test_all_agents_isolated_from_external(self, data_plane_running):
+        """Every agent container should be blocked from external IPs."""
+        for name in self._discover_all():
+            result = exec_in_agent(
+                "nc -z -w 2 8.8.8.8 53 && echo FAIL || echo BLOCKED",
+                container_name=name,
+            )
+            assert "BLOCKED" in result.stdout, \
+                f"{name} can reach external IPs directly — isolation broken!"
+
+    def test_agents_have_distinct_hostnames(self, data_plane_running):
+        """Each agent container should report a different hostname."""
+        hostnames = set()
+        for name in self._discover_all():
+            result = exec_in_agent("hostname", container_name=name)
+            hostnames.add(result.stdout.strip())
+        assert len(hostnames) >= 2, \
+            f"Expected distinct hostnames, got: {hostnames}"
 
 
 @pytest.mark.e2e
@@ -320,11 +400,12 @@ class TestAgentSecurityHardening:
         """no-new-privileges should prevent setuid escalation."""
         # Check if agent already runs as root
         who = exec_in_agent("id -u")
+        agent_name = _discover_agent_container_name()
         if who.stdout.strip() == "0":
             # Already root — no-new-privileges is set but sudo is a no-op.
             # Verify the security_opt is in place via container inspect.
             result = subprocess.run(
-                ["docker", "inspect", "agent", "--format", "{{.HostConfig.SecurityOpt}}"],
+                ["docker", "inspect", agent_name, "--format", "{{.HostConfig.SecurityOpt}}"],
                 capture_output=True, text=True, timeout=5,
             )
             assert "no-new-privileges" in result.stdout, \
@@ -414,7 +495,9 @@ class TestLocalAdminAPI:
         data = r.json()
         assert data["status"] in ("healthy", "degraded")
         assert "checks" in data
-        assert "agent" in data["checks"]
+        # Agent containers have dynamic names (e.g. data_plane-agent-dev-1)
+        agent_checks = [k for k in data["checks"] if "agent" in k and "manager" not in k]
+        assert len(agent_checks) >= 1, f"No agent container in checks: {list(data['checks'])}"
         assert "dns-filter" in data["checks"]
         assert "http-proxy" in data["checks"]
 
@@ -423,7 +506,9 @@ class TestLocalAdminAPI:
         r = requests.get(f"{admin_url}/api/info", timeout=5)
         assert r.status_code == 200
         data = r.json()
-        assert data["containers"]["agent"] == "agent"
+        # Agent name is dynamic (label-discovered), just verify it's present
+        assert "agent" in data["containers"]
+        assert len(data["containers"]["agent"]) > 0
         assert data["containers"]["dns"] == "dns-filter"
         assert data["containers"]["http_proxy"] == "http-proxy"
 
@@ -433,16 +518,19 @@ class TestLocalAdminAPI:
         assert r.status_code == 200
         data = r.json()
         assert "containers" in data
-        for name in ("agent", "dns-filter", "http-proxy"):
+        # Agent containers have dynamic names; check at least one is present
+        agent_containers = [k for k in data["containers"] if "agent" in k and "manager" not in k]
+        assert len(agent_containers) >= 1, f"No agent container found: {list(data['containers'])}"
+        for name in ("dns-filter", "http-proxy"):
             assert name in data["containers"]
             assert "status" in data["containers"][name]
 
-    def test_get_single_container(self, admin_url):
+    def test_get_single_container(self, admin_url, agent_container_name):
         """Should get status for a specific container."""
-        r = requests.get(f"{admin_url}/api/containers/agent", timeout=10)
+        r = requests.get(f"{admin_url}/api/containers/{agent_container_name}", timeout=10)
         assert r.status_code == 200
         data = r.json()
-        assert data["name"] == "agent"
+        assert data["name"] == agent_container_name
         assert "status" in data
 
     def test_get_config(self, admin_url):
@@ -635,11 +723,11 @@ class TestWebTerminal:
     """
 
     @pytest.fixture(autouse=True)
-    def _terminal_ws(self, admin_url, data_plane_running):
+    def _terminal_ws(self, admin_url, data_plane_running, agent_container_name):
         """Connect a WebSocket to the agent terminal for each test."""
         ws_url = admin_url.replace("http://", "ws://")
         self.ws = websocket.create_connection(
-            f"{ws_url}/api/terminal/agent", timeout=10
+            f"{ws_url}/api/terminal/{agent_container_name}", timeout=10
         )
         # Drain the initial bash prompt / MOTD (root='#', user='$')
         ws_recv_until(self.ws, PROMPT_MARKERS, max_reads=15)

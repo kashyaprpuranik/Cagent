@@ -6,6 +6,7 @@ connect_imap()/connect_smtp() methods, so providers only implement connection lo
 """
 
 import imaplib
+import re
 import smtplib
 import email
 import email.utils
@@ -17,6 +18,19 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Remove characters that could cause header injection or path traversal."""
+    # Strip CR/LF (header injection), NUL, and path separators
+    filename = re.sub(r'[\r\n\x00/\\]', '', filename)
+    # Collapse to a reasonable length
+    return filename[:255] if filename else "attachment"
+
+
+def _escape_imap_string(value: str) -> str:
+    """Escape a string for safe use inside IMAP double-quoted search criteria."""
+    return value.replace('\\', '\\\\').replace('"', '\\"')
 
 from config import EmailAccount
 
@@ -88,7 +102,7 @@ class EmailProvider(ABC):
                 part.add_header(
                     "Content-Disposition",
                     "attachment",
-                    filename=att.get("filename", "attachment"),
+                    filename=_sanitize_filename(att.get("filename", "attachment")),
                 )
                 outer.attach(part)
             msg = outer
@@ -129,7 +143,7 @@ class EmailProvider(ABC):
                 imap_date = dt.strftime("%d-%b-%Y")
                 criteria.append(f'SINCE {imap_date}')
             if from_filter:
-                criteria.append(f'FROM "{from_filter}"')
+                criteria.append(f'FROM "{_escape_imap_string(from_filter)}"')
 
             search_str = " ".join(criteria) if criteria else "ALL"
             status, data = imap.search(None, search_str)

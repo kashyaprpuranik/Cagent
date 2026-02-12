@@ -8,7 +8,7 @@ class TestDataPlaneManagement:
         """Should return empty list when no agents connected."""
         response = client.get("/api/v1/agents", headers=auth_headers)
         assert response.status_code == 200
-        assert isinstance(response.json(), list)
+        assert isinstance(response.json()["items"], list)
 
     def test_agent_heartbeat_creates_agent(self, client, auth_headers):
         """Should create agent state on first heartbeat."""
@@ -39,7 +39,7 @@ class TestDataPlaneManagement:
 
         response = client.get("/api/v1/agents", headers=auth_headers)
         assert response.status_code == 200
-        agents = response.json()
+        agents = response.json()["items"]
         agent = next((a for a in agents if a["agent_id"] == "list-test-agent"), None)
         assert agent is not None
         assert agent["status"] == "running"

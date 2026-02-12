@@ -28,7 +28,7 @@ class TestMultiTenancy:
 
         response = client.get("/api/v1/tenants", headers=super_admin_headers)
         assert response.status_code == 200
-        tenants = response.json()
+        tenants = response.json()["items"]
         assert len(tenants) >= 1
         slugs = [t["slug"] for t in tenants]
         assert "list-tenant" in slugs
@@ -45,7 +45,7 @@ class TestMultiTenancy:
 
         # List agents - __default__ should NOT appear in list (filtered out)
         list_response = client.get("/api/v1/agents", headers=super_admin_headers)
-        agent_ids = [a["agent_id"] for a in list_response.json()]
+        agent_ids = [a["agent_id"] for a in list_response.json()["items"]]
         assert "__default__" not in agent_ids
 
     def test_delete_tenant(self, client, super_admin_headers):

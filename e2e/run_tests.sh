@@ -183,7 +183,7 @@ PYEOF
     HEARTBEAT_INTERVAL=5 \
     CONFIG_SYNC_INTERVAL=10 \
     docker compose -f docker-compose.yml -f "$SCRIPT_DIR/docker-compose.e2e.yml" \
-        --profile dev --profile managed --profile auditing up -d --build
+        --profile dev --profile managed --profile auditing up -d --build --scale agent-dev=2
 
     # 9. Connect agent-manager and log-shipper to bridge so they can reach CP
     docker network connect e2e-bridge agent-manager 2>/dev/null || true
@@ -206,8 +206,9 @@ PYEOF
 
     # 11. Wait for proxy readiness (agent-manager writes configs and restarts services)
     echo "Waiting for proxy readiness..."
+    AGENT_CONTAINER=$(docker ps --filter "label=cagent.role=agent" --format "{{.Names}}" | head -1)
     for i in $(seq 1 30); do
-        if docker exec agent curl -sf -x http://10.200.1.10:8443 --connect-timeout 2 \
+        if docker exec "$AGENT_CONTAINER" curl -sf -x http://10.200.1.10:8443 --connect-timeout 2 \
             http://api.github.com/ -o /dev/null 2>/dev/null; then
             echo "Proxy ready."
             break
@@ -230,20 +231,56 @@ PYEOF
 
     # 12. Wait for log pipeline (Vector → CP → OpenObserve) to be functional.
     #     Vector starts before the e2e-bridge connect, so its initial requests
-    #     fail with DNS errors and get dropped.  We poll the CP ingest health
-    #     from inside the log-shipper container to confirm connectivity, then
-    #     generate a canary log event and verify it reaches the analytics API.
+    #     fail with DNS errors and get dropped as non-retriable.
+    #
+    #     Step A: Verify Vector can reach the CP API.
+    #     Step B: Generate canary traffic and verify it appears end-to-end in
+    #             the CP analytics endpoint. This proves the full pipeline works:
+    #             agent → Envoy → Docker logs → Vector → CP ingest → OpenObserve.
     echo "Waiting for log pipeline..."
     for i in $(seq 1 20); do
         if docker exec log-shipper wget -q -O /dev/null --timeout=2 \
             http://backend:8000/health 2>/dev/null; then
-            echo "Log-shipper can reach CP."
+            echo "  Log-shipper can reach CP."
             break
         fi
         if [ "$i" -eq 20 ]; then
-            echo "WARNING: log-shipper cannot reach CP (continuing anyway)"
+            echo "  WARNING: log-shipper cannot reach CP (continuing anyway)"
         fi
         sleep 2
+    done
+
+    # Step B: end-to-end canary — generate blocked traffic and verify it
+    # reaches the CP analytics endpoint.  Retry traffic generation every 15s
+    # in case the first batch is dropped during Vector startup.
+    local CANARY_DOMAIN="pipeline-canary.example.com"
+    echo "  Verifying end-to-end log pipeline with canary traffic..."
+    for attempt in $(seq 1 4); do
+        # Generate canary blocked request
+        docker exec "$AGENT_CONTAINER" curl -s -o /dev/null \
+            -x http://10.200.1.10:8443 --connect-timeout 5 \
+            "http://${CANARY_DOMAIN}/canary-${attempt}" 2>/dev/null || true
+
+        # Poll CP analytics for the canary domain (up to 20s per attempt)
+        for i in $(seq 1 10); do
+            if curl -sf "http://localhost:8002/api/v1/analytics/blocked-domains" \
+                -H "Authorization: Bearer $ADMIN_TOKEN" \
+                -G --data-urlencode "agent_id=e2e-agent" --data-urlencode "hours=1" \
+                2>/dev/null | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+domains = [d['domain'] for d in data.get('blocked_domains', [])]
+sys.exit(0 if '${CANARY_DOMAIN}' in domains else 1)
+" 2>/dev/null; then
+                echo "  Log pipeline verified (canary appeared on attempt $attempt)."
+                break 2
+            fi
+            sleep 2
+        done
+
+        if [ "$attempt" -eq 4 ]; then
+            echo "  WARNING: canary never appeared in analytics (continuing anyway)"
+        fi
     done
 
     echo "Infrastructure ready."
@@ -255,9 +292,12 @@ is_ready() {
     curl -sf http://localhost:8002/health >/dev/null 2>&1 || return 1
     # Agent token exists
     [ -f "$SCRIPT_DIR/.agent-token" ] || return 1
-    # Agent container running with dev profile
+    # Agent container(s) running with dev profile (discovered by label)
+    local agent_cid
+    agent_cid=$(docker ps --filter "label=cagent.role=agent" -q 2>/dev/null | head -1)
+    [ -n "$agent_cid" ] || return 1
     local svc
-    svc=$(docker inspect agent --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
+    svc=$(docker inspect "$agent_cid" --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
     [ "$svc" = "agent-dev" ] || return 1
     # Agent-manager running
     docker ps --filter "name=^agent-manager$" --format "{{.Names}}" 2>/dev/null | grep -q agent-manager || return 1

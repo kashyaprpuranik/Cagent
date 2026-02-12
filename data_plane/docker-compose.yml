@@ -57,6 +57,7 @@ services:
     # No container_name — allows `docker compose --scale agent-dev=N`
     labels:
       - "cagent.role=agent"
+      - "cagent.log-collect=true"
     profiles:
       - dev
 
@@ -140,6 +141,7 @@ services:
     # No container_name — allows `docker compose --scale agent=N`
     labels:
       - "cagent.role=agent"
+      - "cagent.log-collect=true"
     profiles:
       - standard
 
@@ -208,6 +210,8 @@ services:
   dns-filter:
     image: coredns/coredns:latest
     container_name: dns-filter
+    labels:
+      - "cagent.log-collect=true"
     # Scaling: to run >1 replica, remove container_name and static IPs, add a load balancer
     # deploy:
     #   replicas: ${DNS_FILTER_REPLICAS:-1}
@@ -234,6 +238,8 @@ services:
   http-proxy:
     image: envoyproxy/envoy:v1.28-latest
     container_name: http-proxy
+    labels:
+      - "cagent.log-collect=true"
     # Scaling: to run >1 replica, remove container_name and static IPs, add a load balancer
     # deploy:
     #   replicas: ${HTTP_PROXY_REPLICAS:-1}
@@ -347,6 +353,8 @@ services:
       context: ./services
       dockerfile: agent_manager/Dockerfile
     container_name: agent-manager
+    labels:
+      - "cagent.log-collect=true"
     profiles:
       - managed
       - admin
@@ -424,6 +432,8 @@ services:
     build:
       context: ./services/email_proxy
     container_name: email-proxy
+    labels:
+      - "cagent.log-collect=true"
     profiles:
       - email
 

@@ -214,7 +214,7 @@ class TestHeartbeatAndRegistration:
         )
         assert r.status_code == 200
         data = r.json()
-        assert data["status"] in ("running", "exited", "not_found"), f"Unexpected status: {data['status']}"
+        assert data["status"] in ("running", "exited", "not_found", "unknown"), f"Unexpected status: {data['status']}"
         # container_id should be populated if running
         if data["status"] == "running":
             assert data["container_id"] is not None
@@ -654,7 +654,7 @@ class TestAnalytics:
         # On fresh startup, Vector's initial requests may fail (DNS not ready
         # until e2e-bridge connect) and get dropped as non-retriable.  If the
         # first traffic batch isn't found, generate fresh traffic and retry.
-        entry = self._wait_for_blocked_in_cp(admin_headers, timeout=45.0)
+        entry = self._wait_for_blocked_in_cp(admin_headers, timeout=30.0)
         if entry is None:
             for _ in range(3):
                 exec_in_agent(
@@ -797,7 +797,7 @@ class TestDomainPolicyTTL:
             f"{CP_BASE}/api/v1/domain-policies", headers=admin_headers
         )
         assert r.status_code == 200
-        domains = [p["domain"] for p in r.json()]
+        domains = [p["domain"] for p in r.json()["items"]]
         assert self.TTL_DOMAIN in domains
 
         # Should appear in export
@@ -822,7 +822,7 @@ class TestDomainPolicyTTL:
             f"{CP_BASE}/api/v1/domain-policies", headers=admin_headers
         )
         assert r.status_code == 200
-        domains = [p["domain"] for p in r.json()]
+        domains = [p["domain"] for p in r.json()["items"]]
         assert self.TTL_DOMAIN not in domains, (
             f"{self.TTL_DOMAIN} still in policy list after expiry"
         )

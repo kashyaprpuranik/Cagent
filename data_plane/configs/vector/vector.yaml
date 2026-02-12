@@ -14,17 +14,14 @@ api:
 # SOURCES
 # =============================================================================
 sources:
-  # Docker container logs (agent(s), envoy, coredns stdout/stderr)
-  # Agent containers are discovered by label; infrastructure by name.
+  # Docker container logs (agent(s), envoy, coredns, agent-manager, email-proxy)
+  # Vector's docker_logs source passes include_labels to the Docker API for
+  # container discovery.  All monitored containers carry "cagent.log-collect=true".
+  # NOTE: Docker API ANDs multiple label filters, so only ONE label is used here.
   docker_logs:
     type: docker_logs
     include_labels:
-      - "cagent.role=agent"
-    include_containers:
-      - "http-proxy"
-      - "dns-filter"
-      - "agent-manager"
-      - "email-proxy"
+      - "cagent.log-collect=true"
 
   # gVisor debug/audit logs (security-critical)
   # Requires runsc configured with: --debug-log=/var/log/runsc/
@@ -207,8 +204,8 @@ sinks:
       token: "${CONTROL_PLANE_TOKEN}"
     compression: gzip
     batch:
-      max_events: 200
-      timeout_secs: 10
+      max_events: ${VECTOR_BATCH_MAX_EVENTS:-200}
+      timeout_secs: ${VECTOR_BATCH_TIMEOUT_SECS:-10}
     request:
       headers:
         Content-Type: application/json

@@ -16,3 +16,8 @@ services:
   local-admin:
     volumes:
       - ${E2E_CAGENT_YAML:-../data_plane/configs/cagent.yaml}:/etc/cagent/cagent.yaml
+
+  log-shipper:
+    environment:
+      - VECTOR_BATCH_MAX_EVENTS=50
+      - VECTOR_BATCH_TIMEOUT_SECS=1

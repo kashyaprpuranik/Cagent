@@ -1,3 +1,5 @@
+import gzip
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
@@ -50,8 +52,14 @@ async def _parse_log_batch(request: Request) -> LogBatch:
     Accepts both:
       - {"logs": [...]}           (standard format)
       - [{"logs": [...]}, ...]    (Vector json codec wraps batches in an array)
+
+    Handles gzip-compressed request bodies (Content-Encoding: gzip),
+    which Vector sends when ``compression: gzip`` is configured.
     """
-    body = await request.json()
+    raw = await request.body()
+    if request.headers.get("content-encoding") == "gzip":
+        raw = gzip.decompress(raw)
+    body = json.loads(raw)
     if isinstance(body, list):
         all_logs = []
         for item in body:

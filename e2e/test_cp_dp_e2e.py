@@ -58,7 +58,34 @@ def acme_admin_headers():
     return {"Authorization": f"Bearer {ACME_ADMIN_TOKEN}"}
 
 
+@pytest.fixture(scope="session")
+def default_profile_id(admin_headers):
+    """Return the 'default' security profile ID (created by post_seed.py)."""
+    return _get_default_profile_id(admin_headers)
+
+
 PROXY = "http://10.200.1.10:8443"
+
+
+def _get_default_profile_id(admin_headers) -> int:
+    """Get or create the 'default' security profile for the default tenant."""
+    r = requests.get(
+        f"{CP_BASE}/api/v1/security-profiles",
+        headers=admin_headers,
+    )
+    assert r.status_code == 200, f"Failed to list profiles: {r.text}"
+    for p in r.json()["items"]:
+        if p["name"] == "default":
+            return p["id"]
+
+    # Create it if post_seed.py hasn't run
+    r = requests.post(
+        f"{CP_BASE}/api/v1/security-profiles",
+        headers=admin_headers,
+        json={"name": "default", "description": "Default profile for e2e tests"},
+    )
+    assert r.status_code == 200, f"Failed to create default profile: {r.text}"
+    return r.json()["id"]
 
 
 def _discover_agent_container() -> str:
@@ -295,7 +322,7 @@ class TestDomainPolicies:
                         headers=admin_headers,
                     )
 
-    def test_create_policy(self, cp_running, admin_headers):
+    def test_create_policy(self, cp_running, admin_headers, default_profile_id):
         """Admin can create a domain policy."""
         r = requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
@@ -304,6 +331,7 @@ class TestDomainPolicies:
                 "domain": "e2e-test.example.com",
                 "alias": "e2etest",
                 "description": "E2E test policy",
+                "profile_id": default_profile_id,
             },
         )
         assert r.status_code == 200
@@ -312,13 +340,13 @@ class TestDomainPolicies:
         assert data["alias"] == "e2etest"
         assert data["enabled"] is True
 
-    def test_agent_sees_policy(self, cp_running, admin_headers, agent_headers):
+    def test_agent_sees_policy(self, cp_running, admin_headers, agent_headers, default_profile_id):
         """Agent token can see exported domain policies."""
         # Create a policy first
         requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
             headers=admin_headers,
-            json={"domain": "e2e-test.example.com"},
+            json={"domain": "e2e-test.example.com", "profile_id": default_profile_id},
         )
 
         # Agent should see it via export
@@ -330,12 +358,12 @@ class TestDomainPolicies:
         data = r.json()
         assert "e2e-test.example.com" in data["domains"]
 
-    def test_policy_export(self, cp_running, admin_headers, agent_headers):
+    def test_policy_export(self, cp_running, admin_headers, agent_headers, default_profile_id):
         """Export endpoint returns domains list for CoreDNS."""
         requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
             headers=admin_headers,
-            json={"domain": "e2e-test.example.com"},
+            json={"domain": "e2e-test.example.com", "profile_id": default_profile_id},
         )
 
         r = requests.get(
@@ -347,7 +375,7 @@ class TestDomainPolicies:
         assert "domains" in data
         assert "generated_at" in data
 
-    def test_policy_lookup(self, cp_running, admin_headers, agent_headers):
+    def test_policy_lookup(self, cp_running, admin_headers, agent_headers, default_profile_id):
         """for-domain endpoint returns policy details."""
         requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
@@ -355,6 +383,7 @@ class TestDomainPolicies:
             json={
                 "domain": "e2e-test.example.com",
                 "requests_per_minute": 42,
+                "profile_id": default_profile_id,
             },
         )
 
@@ -468,7 +497,7 @@ class TestCredentialInjection:
                     )
 
     def test_cp_stores_and_returns_credentials(
-        self, cp_running, admin_headers, agent_headers
+        self, cp_running, admin_headers, agent_headers, default_profile_id
     ):
         """CP should store credentials and return them via for-domain endpoint."""
         # Create domain policy with credential
@@ -478,6 +507,7 @@ class TestCredentialInjection:
             json={
                 "domain": "e2e-cred-test.example.com",
                 "alias": "e2ecred",
+                "profile_id": default_profile_id,
                 "credential": {
                     "header": "Authorization",
                     "format": "Bearer {value}",
@@ -789,26 +819,29 @@ class TestDomainPolicyTTL:
                 headers=admin_headers,
             )
 
-    def _create_ttl_policy(self, admin_headers, expires_at):
+    def _create_ttl_policy(self, admin_headers, expires_at, profile_id=None):
         """Helper: create a TTL policy and track its ID for cleanup."""
+        body = {
+            "domain": self.TTL_DOMAIN,
+            "expires_at": expires_at,
+        }
+        if profile_id is not None:
+            body["profile_id"] = profile_id
         r = requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
             headers=admin_headers,
-            json={
-                "domain": self.TTL_DOMAIN,
-                "expires_at": expires_at,
-            },
+            json=body,
         )
         assert r.status_code == 200, f"Failed to create TTL policy: {r.text}"
         self._created_policy_ids.append(r.json()["id"])
         return r.json()
 
-    def test_create_policy_with_expires_at(self, cp_running, admin_headers, agent_headers):
+    def test_create_policy_with_expires_at(self, cp_running, admin_headers, agent_headers, default_profile_id):
         """Create a policy with expires_at, verify it appears in list and export."""
         from datetime import datetime, timedelta, timezone
         expires = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
 
-        data = self._create_ttl_policy(admin_headers, expires)
+        data = self._create_ttl_policy(admin_headers, expires, profile_id=default_profile_id)
         assert data["domain"] == self.TTL_DOMAIN
         assert data["expires_at"] is not None
 
@@ -827,12 +860,12 @@ class TestDomainPolicyTTL:
         assert r.status_code == 200
         assert self.TTL_DOMAIN in r.json()["domains"]
 
-    def test_expired_policy_filtered(self, cp_running, admin_headers, agent_headers):
+    def test_expired_policy_filtered(self, cp_running, admin_headers, agent_headers, default_profile_id):
         """An expired policy should be filtered from list, export, and for-domain."""
         from datetime import datetime, timedelta, timezone
         expires = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
 
-        self._create_ttl_policy(admin_headers, expires)
+        self._create_ttl_policy(admin_headers, expires, profile_id=default_profile_id)
 
         # Wait for expiry
         time.sleep(4)
@@ -856,12 +889,12 @@ class TestDomainPolicyTTL:
             f"{self.TTL_DOMAIN} still in export after expiry"
         )
 
-    def test_policy_for_domain_respects_expiry(self, cp_running, admin_headers, agent_headers):
+    def test_policy_for_domain_respects_expiry(self, cp_running, admin_headers, agent_headers, default_profile_id):
         """for-domain lookup should not match an expired policy."""
         from datetime import datetime, timedelta, timezone
         expires = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
 
-        self._create_ttl_policy(admin_headers, expires)
+        self._create_ttl_policy(admin_headers, expires, profile_id=default_profile_id)
 
         # Wait for expiry
         time.sleep(4)
@@ -909,7 +942,7 @@ class TestPathFiltering:
                         headers=admin_headers,
                     )
 
-    def _ensure_policy(self, admin_headers):
+    def _ensure_policy(self, admin_headers, profile_id):
         """Create the path-filtered policy if it doesn't already exist."""
         r = requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
@@ -917,6 +950,7 @@ class TestPathFiltering:
             json={
                 "domain": self.DOMAIN,
                 "allowed_paths": ["/allowed", "/allowed/*"],
+                "profile_id": profile_id,
             },
         )
         assert r.status_code == 200
@@ -937,17 +971,17 @@ class TestPathFiltering:
                 return last_stdout
             time.sleep(poll)
 
-    def test_blocked_path_rejected(self, cp_running, admin_headers):
+    def test_blocked_path_rejected(self, cp_running, admin_headers, default_profile_id):
         """A path not in allowed_paths should be rejected by the Lua filter."""
-        self._ensure_policy(admin_headers)
+        self._ensure_policy(admin_headers, default_profile_id)
         body = self._wait_for_path_response("/blocked", "path_not_allowed")
         assert "path_not_allowed" in body, (
             f"Expected 'path_not_allowed' in response, got: {body[:300]}"
         )
 
-    def test_allowed_path_passes_lua(self, cp_running, admin_headers):
+    def test_allowed_path_passes_lua(self, cp_running, admin_headers, default_profile_id):
         """An allowed path should pass Lua but hit the Envoy catch-all 403."""
-        self._ensure_policy(admin_headers)
+        self._ensure_policy(admin_headers, default_profile_id)
         body = self._wait_for_path_response("/allowed/test", "destination_not_allowed")
         assert "path_not_allowed" not in body, (
             f"Path filter blocked /allowed/test unexpectedly: {body[:300]}"
@@ -981,12 +1015,12 @@ class TestPolicyPropagation:
                         headers=admin_headers,
                     )
 
-    def test_new_policy_in_export(self, cp_running, admin_headers, agent_headers):
+    def test_new_policy_in_export(self, cp_running, admin_headers, agent_headers, default_profile_id):
         """A newly created policy should appear in the export endpoint."""
         requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
             headers=admin_headers,
-            json={"domain": self.DOMAIN},
+            json={"domain": self.DOMAIN, "profile_id": default_profile_id},
         )
         r = requests.get(
             f"{CP_BASE}/api/v1/domain-policies/export",
@@ -997,12 +1031,12 @@ class TestPolicyPropagation:
             f"{self.DOMAIN} not in export after creation"
         )
 
-    def test_disabled_policy_hidden(self, cp_running, admin_headers, agent_headers):
+    def test_disabled_policy_hidden(self, cp_running, admin_headers, agent_headers, default_profile_id):
         """A disabled policy should not appear in the export endpoint."""
         r = requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
             headers=admin_headers,
-            json={"domain": self.DOMAIN},
+            json={"domain": self.DOMAIN, "profile_id": default_profile_id},
         )
         policy_id = r.json()["id"]
 
@@ -1023,12 +1057,12 @@ class TestPolicyPropagation:
             f"{self.DOMAIN} still in export after disable"
         )
 
-    def test_deleted_policy_removed(self, cp_running, admin_headers, agent_headers):
+    def test_deleted_policy_removed(self, cp_running, admin_headers, agent_headers, default_profile_id):
         """A deleted policy should not appear in the export endpoint."""
         r = requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
             headers=admin_headers,
-            json={"domain": self.DOMAIN},
+            json={"domain": self.DOMAIN, "profile_id": default_profile_id},
         )
         policy_id = r.json()["id"]
 
@@ -1081,7 +1115,7 @@ class TestCredentialRotation:
                     )
 
     def test_credential_rotation_via_api(
-        self, cp_running, admin_headers, agent_headers
+        self, cp_running, admin_headers, agent_headers, default_profile_id
     ):
         """Rotating a credential should update the value returned by for-domain."""
         # Create policy with initial credential
@@ -1090,6 +1124,7 @@ class TestCredentialRotation:
             headers=admin_headers,
             json={
                 "domain": self.DOMAIN,
+                "profile_id": default_profile_id,
                 "credential": {
                     "header": "Authorization",
                     "format": "Bearer {value}",
@@ -1240,66 +1275,109 @@ class TestAuditTrail:
 # TestPerAgentPolicies
 # ---------------------------------------------------------------------------
 
-class TestPerAgentPolicies:
-    """Verify agent-scoped policies appear only for the correct agent."""
+class TestProfileScopedPolicies:
+    """Verify profile-scoped policies appear only for agents with that profile."""
 
     @pytest.fixture(autouse=True)
-    def _cleanup_agent_policies(self, admin_headers):
-        """Track and delete policies created during tests."""
-        self._created_ids = []
+    def _cleanup_profile_policies(self, admin_headers):
+        """Track and delete policies and profiles created during tests."""
+        self._created_policy_ids = []
+        self._created_profile_ids = []
         yield
-        for pid in self._created_ids:
+        for pid in self._created_policy_ids:
             requests.delete(
                 f"{CP_BASE}/api/v1/domain-policies/{pid}",
                 headers=admin_headers,
             )
+        # Unassign agent profile before deleting profiles
+        requests.delete(
+            f"{CP_BASE}/api/v1/agents/{AGENT_ID}/profile",
+            headers=admin_headers,
+        )
+        for pid in self._created_profile_ids:
+            requests.delete(
+                f"{CP_BASE}/api/v1/security-profiles/{pid}",
+                headers=admin_headers,
+            )
 
-    def test_agent_scoped_policy_in_export(
+    def test_profile_policy_in_export(
         self, cp_running, admin_headers, agent_headers
     ):
-        """A policy scoped to the E2E agent should appear in its export."""
+        """A policy in the agent's assigned profile should appear in export."""
+        # Create a dedicated profile
+        r = requests.post(
+            f"{CP_BASE}/api/v1/security-profiles",
+            headers=admin_headers,
+            json={"name": "e2e-scoped-profile"},
+        )
+        assert r.status_code == 200
+        profile_id = r.json()["id"]
+        self._created_profile_ids.append(profile_id)
+
+        # Create a policy in that profile
         r = requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
             headers=admin_headers,
             json={
-                "domain": "agentscope-e2e.example.com",
-                "agent_id": AGENT_ID,
+                "domain": "profilescope-e2e.example.com",
+                "profile_id": profile_id,
             },
         )
         assert r.status_code == 200
-        self._created_ids.append(r.json()["id"])
+        self._created_policy_ids.append(r.json()["id"])
 
+        # Assign the profile to the e2e agent
+        r = requests.put(
+            f"{CP_BASE}/api/v1/agents/{AGENT_ID}/profile",
+            headers=admin_headers,
+            json={"profile_id": profile_id},
+        )
+        assert r.status_code == 200
+
+        # Agent should see it in export
         r = requests.get(
             f"{CP_BASE}/api/v1/domain-policies/export",
             headers=agent_headers,
         )
         assert r.status_code == 200
-        assert "agentscope-e2e.example.com" in r.json()["domains"], (
-            "Agent-scoped policy not in export for the correct agent"
+        assert "profilescope-e2e.example.com" in r.json()["domains"], (
+            "Profile-scoped policy not in export for agent with that profile"
         )
 
-    def test_other_agent_policy_hidden(
-        self, cp_running, admin_headers, agent_headers
+    def test_other_profile_policy_hidden(
+        self, cp_running, admin_headers, agent_headers, default_profile_id
     ):
-        """A policy scoped to a different agent should NOT appear in export."""
+        """A policy in a different profile should NOT appear in agent's export."""
+        # Create a profile that will NOT be assigned to the agent
+        r = requests.post(
+            f"{CP_BASE}/api/v1/security-profiles",
+            headers=admin_headers,
+            json={"name": "e2e-other-profile"},
+        )
+        assert r.status_code == 200
+        other_profile_id = r.json()["id"]
+        self._created_profile_ids.append(other_profile_id)
+
+        # Create a policy scoped to the other profile
         r = requests.post(
             f"{CP_BASE}/api/v1/domain-policies",
             headers=admin_headers,
             json={
-                "domain": "otheragent-e2e.example.com",
-                "agent_id": "nonexistent-agent",
+                "domain": "otherprofile-e2e.example.com",
+                "profile_id": other_profile_id,
             },
         )
         assert r.status_code == 200
-        self._created_ids.append(r.json()["id"])
+        self._created_policy_ids.append(r.json()["id"])
 
+        # Agent uses the default profile (not assigned to other)
         r = requests.get(
             f"{CP_BASE}/api/v1/domain-policies/export",
             headers=agent_headers,
         )
         assert r.status_code == 200
-        assert "otheragent-e2e.example.com" not in r.json()["domains"], (
-            "Policy for a different agent leaked into e2e-agent export"
+        assert "otherprofile-e2e.example.com" not in r.json()["domains"], (
+            "Policy from another profile leaked into agent's export"
         )
 
 
@@ -1363,6 +1441,222 @@ class TestAgentLifecycle:
         assert data["last_command_result"] == "success", (
             f"Wipe command failed: {data}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestResourcePolicyPropagation
+# ---------------------------------------------------------------------------
+
+def _safe_int(s: str) -> int:
+    """Parse an int from docker inspect output, returning 0 for non-numeric values like '<no value>'."""
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _get_container_resources(container_name: str) -> dict:
+    """Read resource limits from a container via docker inspect."""
+    result = subprocess.run(
+        ["docker", "inspect", "--format",
+         "{{json .HostConfig.NanoCpus}} {{json .HostConfig.Memory}} {{json .HostConfig.PidsLimit}}",
+         container_name],
+        capture_output=True, text=True, timeout=10,
+    )
+    parts = result.stdout.strip().split()
+    nano_cpus = _safe_int(parts[0]) if len(parts) > 0 else 0
+    memory_bytes = _safe_int(parts[1]) if len(parts) > 1 else 0
+    pids = _safe_int(parts[2]) if len(parts) > 2 else 0
+    return {
+        "cpu_limit": nano_cpus / 1e9 if nano_cpus > 0 else None,
+        "memory_limit_mb": memory_bytes // (1024 * 1024) if memory_bytes > 0 else None,
+        "pids_limit": pids if pids > 0 else None,
+    }
+
+
+class TestResourcePolicyPropagation:
+    """Verify resource limit updates flow from CP profile to DP container.
+
+    Flow: admin updates SecurityProfile → heartbeat returns limits →
+    agent-manager calls docker update → container reflects new limits.
+    """
+
+    PROFILE_NAME = "e2e-resource-test"
+    # Heartbeat is 5s in e2e; allow several cycles for propagation
+    PROPAGATION_TIMEOUT = 45
+    POLL_INTERVAL = 5
+
+    def _create_profile(self, admin_headers, **kwargs):
+        payload = {"name": self.PROFILE_NAME, **kwargs}
+        r = requests.post(
+            f"{CP_BASE}/api/v1/security-profiles",
+            headers=admin_headers,
+            json=payload,
+        )
+        if r.status_code == 400 and "already exists" in r.text:
+            # Profile exists from a prior run; fetch and return it
+            r2 = requests.get(
+                f"{CP_BASE}/api/v1/security-profiles",
+                headers=admin_headers,
+            )
+            for p in r2.json()["items"]:
+                if p["name"] == self.PROFILE_NAME:
+                    return p
+        assert r.status_code == 200, f"Failed to create profile: {r.text}"
+        return r.json()
+
+    def _assign_profile(self, admin_headers, profile_id):
+        r = requests.put(
+            f"{CP_BASE}/api/v1/agents/{AGENT_ID}/profile",
+            headers=admin_headers,
+            json={"profile_id": profile_id},
+        )
+        assert r.status_code == 200, f"Failed to assign profile: {r.text}"
+
+    def _unassign_profile(self, admin_headers):
+        requests.delete(
+            f"{CP_BASE}/api/v1/agents/{AGENT_ID}/profile",
+            headers=admin_headers,
+        )
+
+    def _delete_profile(self, admin_headers, profile_id):
+        requests.delete(
+            f"{CP_BASE}/api/v1/security-profiles/{profile_id}",
+            headers=admin_headers,
+        )
+
+    def _wait_for_resource(self, container, field, expected, timeout=None):
+        """Poll container resources until field matches expected value."""
+        timeout = timeout or self.PROPAGATION_TIMEOUT
+        deadline = time.time() + timeout
+        actual = None
+        while time.time() < deadline:
+            resources = _get_container_resources(container)
+            actual = resources.get(field)
+            if expected is None:
+                # "no limit" — accept None or very large values
+                if actual is None:
+                    return True
+            elif actual is not None and abs(actual - expected) < 0.01:
+                return True
+            time.sleep(self.POLL_INTERVAL)
+        return False
+
+    def test_cpu_limit_propagates(self, cp_running, admin_headers):
+        """Setting cpu_limit on profile should update container CPU quota."""
+        container = _discover_agent_container()
+
+        profile = self._create_profile(admin_headers, cpu_limit=0.5)
+        profile_id = profile["id"]
+        try:
+            self._assign_profile(admin_headers, profile_id)
+
+            assert self._wait_for_resource(container, "cpu_limit", 0.5), (
+                f"CPU limit did not propagate to {container} within {self.PROPAGATION_TIMEOUT}s"
+            )
+        finally:
+            self._unassign_profile(admin_headers)
+            self._delete_profile(admin_headers, profile_id)
+
+    def test_memory_limit_propagates(self, cp_running, admin_headers):
+        """Setting memory_limit_mb on profile should update container memory."""
+        container = _discover_agent_container()
+
+        profile = self._create_profile(admin_headers, memory_limit_mb=256)
+        profile_id = profile["id"]
+        try:
+            self._assign_profile(admin_headers, profile_id)
+
+            assert self._wait_for_resource(container, "memory_limit_mb", 256), (
+                f"Memory limit did not propagate to {container} within {self.PROPAGATION_TIMEOUT}s"
+            )
+        finally:
+            self._unassign_profile(admin_headers)
+            self._delete_profile(admin_headers, profile_id)
+
+    def test_pids_limit_propagates(self, cp_running, admin_headers):
+        """Setting pids_limit on profile should update container PID limit."""
+        container = _discover_agent_container()
+
+        profile = self._create_profile(admin_headers, pids_limit=100)
+        profile_id = profile["id"]
+        try:
+            self._assign_profile(admin_headers, profile_id)
+
+            assert self._wait_for_resource(container, "pids_limit", 100), (
+                f"PIDs limit did not propagate to {container} within {self.PROPAGATION_TIMEOUT}s"
+            )
+        finally:
+            self._unassign_profile(admin_headers)
+            self._delete_profile(admin_headers, profile_id)
+
+    def test_resource_update_propagates(self, cp_running, admin_headers):
+        """Updating resource limits on an assigned profile should propagate."""
+        container = _discover_agent_container()
+
+        profile = self._create_profile(admin_headers, cpu_limit=0.5, memory_limit_mb=256)
+        profile_id = profile["id"]
+        try:
+            self._assign_profile(admin_headers, profile_id)
+
+            # Wait for initial limits
+            assert self._wait_for_resource(container, "cpu_limit", 0.5), (
+                "Initial CPU limit did not propagate"
+            )
+
+            # Update the profile
+            r = requests.put(
+                f"{CP_BASE}/api/v1/security-profiles/{profile_id}",
+                headers=admin_headers,
+                json={"cpu_limit": 1.0, "memory_limit_mb": 512},
+            )
+            assert r.status_code == 200
+
+            # Wait for updated limits
+            assert self._wait_for_resource(container, "cpu_limit", 1.0), (
+                "Updated CPU limit did not propagate"
+            )
+            assert self._wait_for_resource(container, "memory_limit_mb", 512), (
+                "Updated memory limit did not propagate"
+            )
+        finally:
+            self._unassign_profile(admin_headers)
+            self._delete_profile(admin_headers, profile_id)
+
+    def test_unassign_profile_clears_limits(self, cp_running, admin_headers):
+        """Unassigning a profile should stop enforcing resource limits."""
+        container = _discover_agent_container()
+
+        # Record baseline (no profile) limits
+        baseline = _get_container_resources(container)
+
+        profile = self._create_profile(admin_headers, cpu_limit=0.25, pids_limit=50)
+        profile_id = profile["id"]
+        try:
+            self._assign_profile(admin_headers, profile_id)
+
+            # Wait for limits to apply
+            assert self._wait_for_resource(container, "cpu_limit", 0.25), (
+                "CPU limit did not propagate before unassign test"
+            )
+
+            # Unassign
+            self._unassign_profile(admin_headers)
+
+            # Heartbeat without profile should return no resource limits;
+            # agent-manager should clear cpu_limit (set NanoCpus=0)
+            deadline = time.time() + self.PROPAGATION_TIMEOUT
+            cleared = False
+            while time.time() < deadline:
+                resources = _get_container_resources(container)
+                # After unassign, cpu_limit should revert (None means unrestricted)
+                if resources["cpu_limit"] is None or resources["cpu_limit"] != 0.25:
+                    cleared = True
+                    break
+                time.sleep(self.POLL_INTERVAL)
+            assert cleared, "Resource limits were not cleared after profile unassignment"
+        finally:
+            self._delete_profile(admin_headers, profile_id)
 
 
 # ---------------------------------------------------------------------------

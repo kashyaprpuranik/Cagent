@@ -256,24 +256,6 @@ static_resources:
 
                 http_filters:
                   # ---------------------------------------------------------
-                  # Request/Response Body Logging (Tap)
-                  # ---------------------------------------------------------
-                  - name: envoy.filters.http.tap
-                    typed_config:
-                      "@type": type.googleapis.com/envoy.extensions.filters.http.tap.v3.Tap
-                      common_config:
-                        static_config:
-                          match_config:
-                            any_match: true
-                          output_config:
-                            sinks:
-                              - file_per_tap:
-                                  path_prefix: /var/log/envoy/tap/
-                            max_buffered_rx_bytes: 10240  # 10KB request body
-                            max_buffered_tx_bytes: 10240  # 10KB response body
-                            streaming: false
-
-                  # ---------------------------------------------------------
                   # Lua Filter - Credential Injection + Rate Limiting + Security
                   # ---------------------------------------------------------
                   - name: envoy.filters.http.lua

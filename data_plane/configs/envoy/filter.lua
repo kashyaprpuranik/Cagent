@@ -555,10 +555,6 @@ function envoy_on_request(request_handle)
     request_handle:headers():remove(policy.credential.header_name)
     request_handle:headers():add(policy.credential.header_name, policy.credential.header_value)
     credential_injected = "true"
-    request_handle:logInfo(string.format(
-      "Injected credential for %s (via %s): %s",
-      real_domain, host, policy.credential.header_name
-    ))
   end
 
   -- Add tracking headers for access log
@@ -589,8 +585,4 @@ function envoy_on_response(response_handle)
     record_egress_bytes(response_handle, domain, content_length)
   end
 
-  response_handle:logInfo(string.format(
-    "RESPONSE: status=%s content_length=%s domain=%s",
-    status, content_length_str, domain or "unknown"
-  ))
 end

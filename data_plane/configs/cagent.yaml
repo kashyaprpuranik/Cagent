@@ -32,6 +32,13 @@ rate_limits:
 security:
   seccomp_profile: standard  # standard, hardened, permissive
 
+# Container resource limits (standalone mode)
+# Omit or set to null to use docker-compose defaults
+# resources:
+#   cpu_limit: 2.0            # Number of CPUs (e.g., 0.5, 1.0, 2.0)
+#   memory_limit_mb: 4096     # Memory limit in MB
+#   pids_limit: 256           # Max number of processes
+
 # =============================================================================
 # Domain Allowlist
 # =============================================================================

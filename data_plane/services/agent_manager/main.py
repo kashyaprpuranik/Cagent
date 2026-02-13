@@ -370,15 +370,24 @@ def update_container_resources(container, cpu_limit=None, memory_limit_mb=None, 
         # Set swap to same as memory (disable swap)
         update_kwargs["memswap_limit"] = mem_bytes
 
-    if pids_limit is not None:
-        update_kwargs["pids_limit"] = pids_limit
+    # pids_limit is not supported by container.update() in the Python SDK —
+    # handle it via the low-level API directly.
+    pids_update_needed = pids_limit is not None
 
-    if not update_kwargs:
+    if not update_kwargs and not pids_update_needed:
         return True, "No resource changes needed"
 
     try:
-        logger.info(f"Updating resource limits on {name}: {update_kwargs}")
-        container.update(**update_kwargs)
+        if update_kwargs:
+            logger.info(f"Updating resource limits on {name}: {update_kwargs}")
+            container.update(**update_kwargs)
+
+        if pids_update_needed:
+            logger.info(f"Updating PID limit on {name}: {pids_limit}")
+            url = container.client.api._url('/containers/{0}/update', container.id)
+            res = container.client.api._post_json(url, data={"PidsLimit": pids_limit})
+            container.client.api._result(res, True)
+
         msg = f"Resource limits updated on {name}"
         logger.info(msg)
         return True, msg

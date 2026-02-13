@@ -116,7 +116,8 @@ export const api = {
     const response = await fetch(url, {
       headers: getAuthHeaders(),
     });
-    return handleResponse<DataPlane[]>(response);
+    const data = await handleResponse<PaginatedResponse<DataPlane>>(response);
+    return data.items;
   },
 
   // Audit Trail (transactional entries from Postgres)
@@ -208,7 +209,8 @@ export const api = {
     const response = await fetch(url, {
       headers: getAuthHeaders(),
     });
-    return handleResponse<ApiToken[]>(response);
+    const data = await handleResponse<PaginatedResponse<ApiToken>>(response);
+    return data.items;
   },
 
   createToken: async (data: CreateApiTokenRequest): Promise<ApiTokenCreated> => {
@@ -241,7 +243,8 @@ export const api = {
     const response = await fetch(`${API_BASE}/tenants`, {
       headers: getAuthHeaders(),
     });
-    return handleResponse<Tenant[]>(response);
+    const data = await handleResponse<PaginatedResponse<Tenant>>(response);
+    return data.items;
   },
 
   createTenant: async (data: CreateTenantRequest): Promise<Tenant> => {
@@ -322,7 +325,8 @@ export const api = {
     const response = await fetch(url, {
       headers: getAuthHeaders(),
     });
-    return handleResponse<DomainPolicy[]>(response);
+    const data = await handleResponse<PaginatedResponse<DomainPolicy>>(response);
+    return data.items;
   },
 
   createDomainPolicy: async (data: CreateDomainPolicyRequest, tenantId?: number): Promise<DomainPolicy> => {

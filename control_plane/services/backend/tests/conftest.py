@@ -4,10 +4,16 @@ Pytest fixtures for control-plane integration tests.
 Supports two modes:
 - SQLite (default): Fast, no Docker required
 - Postgres via testcontainers: Set USE_TESTCONTAINERS=1
+
+Parallel execution via pytest-xdist (-n auto):
+- Each xdist worker gets its own temp-file SQLite DB
+- DATABASE_URL is set at module level (before any config imports)
 """
 
 import os
 import sys
+import tempfile
+import atexit
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from cryptography.fernet import Fernet
@@ -17,12 +23,25 @@ from sqlalchemy.orm import sessionmaker
 
 # Set test encryption key before importing main (must be valid Fernet key)
 os.environ["ENCRYPTION_KEY"] = Fernet.generate_key().decode()
-# Use shared in-memory SQLite for tests (must be shared so all connections see the same DB)
-os.environ["DATABASE_URL"] = "sqlite:///file::memory:?cache=shared"
 # Enable full test data seeding for tests
 os.environ["SEED_TOKENS"] = "true"
 # Disable multi-tenant by default in tests (individual tests opt in)
 os.environ["OPENOBSERVE_MULTI_TENANT"] = "false"
+
+# Per-worker SQLite file. Must be set at module level so config.py (which reads
+# DATABASE_URL on import) sees the correct value even when test files import
+# control_plane modules at module level (e.g., test_redis_client.py).
+# PYTEST_XDIST_WORKER is set by xdist to "gw0", "gw1", etc.
+_WORKER_ID = os.environ.get("PYTEST_XDIST_WORKER", "master")
+_DB_FILE = tempfile.NamedTemporaryFile(
+    prefix=f"cagent_test_{_WORKER_ID}_", suffix=".db", delete=False
+)
+_DB_FILE.close()
+_TEST_DB_URL = f"sqlite:///{_DB_FILE.name}"
+os.environ["DATABASE_URL"] = _TEST_DB_URL
+
+# Clean up temp DB file on process exit
+atexit.register(lambda: os.unlink(_DB_FILE.name) if os.path.exists(_DB_FILE.name) else None)
 
 # Add parent directory to path so we can import main
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,8 +57,7 @@ def database_url():
         with PostgresContainer("postgres:16-alpine") as postgres:
             yield postgres.get_connection_url()
     else:
-        # Use shared in-memory SQLite (same as DATABASE_URL set above)
-        yield "sqlite:///file::memory:?cache=shared"
+        yield _TEST_DB_URL
 
 
 @pytest.fixture(scope="session")

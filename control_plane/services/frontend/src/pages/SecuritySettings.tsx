@@ -35,8 +35,7 @@ export function SecuritySettings() {
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const agents = (dataPlanes as { items?: { agent_id: string; status: string; online: boolean }[] })?.items || dataPlanes || [];
-  const agentList = Array.isArray(agents) ? agents : [];
+  const agentList = dataPlanes ?? [];
 
   // Auto-select first agent
   useEffect(() => {

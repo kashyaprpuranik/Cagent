@@ -56,7 +56,9 @@ def get_tenant_id(token, slug):
     if status != 200:
         print(f"ERROR: Failed to list tenants: {data}")
         sys.exit(1)
-    for tenant in data:
+    # Handle both paginated {"items": [...]} and flat list responses
+    tenants = data.get("items", data) if isinstance(data, dict) else data
+    for tenant in tenants:
         if tenant.get("slug") == slug:
             return tenant["id"]
     print(f"ERROR: Tenant '{slug}' not found")

@@ -120,10 +120,10 @@ def seed_test_data(db: Session):
             db.add(db_token)
             logger.info(f"Seeded token: {token_def['name']} (roles: {token_def['roles']})")
 
-    # Seed placeholder agents for the default tenant (for profile assignment UI)
+    # Seed placeholder agent groups for the default tenant (for profile assignment UI)
     seed_agents = [
-        {"agent_id": "agent-1", "tenant_id": default_tenant_id},
-        {"agent_id": "agent-2", "tenant_id": default_tenant_id},
+        {"agent_id": "agent-group-1", "tenant_id": default_tenant_id},
+        {"agent_id": "agent-group-2", "tenant_id": default_tenant_id},
     ]
     for agent_def in seed_agents:
         existing = db.query(AgentState).filter(AgentState.agent_id == agent_def["agent_id"]).first()

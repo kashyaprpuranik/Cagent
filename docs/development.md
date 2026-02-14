@@ -56,8 +56,8 @@ Runs after uvicorn is healthy (called by `dev_up.sh`). Creates all resources via
 | default | Domain policy | `api.github.com` | 100 rpm |
 | default | Domain policy | `pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org` | Package registries |
 | default | Domain policy | `*.githubusercontent.com` | GitHub raw content |
-| default | Domain policy | `huggingface.co` | Agent-specific (test-agent), with credential |
-| default | Domain policy | `*.aws.amazon.com` | Agent-specific (test-agent) |
+| default | Domain policy | `huggingface.co` | Agent-specific (agent-group-0), with credential |
+| default | Domain policy | `*.aws.amazon.com` | Agent-specific (agent-group-0) |
 | acme | Domain policy | `api.openai.com`, `api.stripe.com`, `api.twilio.com` | Acme Corp APIs |
 | both | IP ACL | `0.0.0.0/0` | Allow all (development default) |
 | default | IP ACL | `10.0.0.0/8`, `203.0.113.50/32` | Sample ACLs |

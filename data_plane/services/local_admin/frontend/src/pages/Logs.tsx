@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   Clock,
   ArrowUpRight,
-  ArrowDownRight,
 } from 'lucide-react';
 import { getContainerLogs, getContainers, getInfo, createLogStream } from '../api/client';
 
@@ -35,8 +34,6 @@ interface TrafficStats {
   errorCount: number;
   rateLimitedCount: number;
   blockedCount: number;
-  totalBytesSent: number;
-  totalBytesReceived: number;
   avgDuration: number;
   topDomains: { domain: string; count: number; bytes: number }[];
   recentErrors: { domain: string; code: number; time: string }[];
@@ -64,8 +61,6 @@ function computeTrafficStats(logs: string[]): TrafficStats {
   let errorCount = 0;
   let rateLimitedCount = 0;
   let blockedCount = 0;
-  let totalBytesSent = 0;
-  let totalBytesReceived = 0;
   let totalDuration = 0;
 
   for (const line of logs) {
@@ -97,8 +92,6 @@ function computeTrafficStats(logs: string[]): TrafficStats {
       errors.push({ domain, code: entry.response_code, time: entry.timestamp });
     }
 
-    totalBytesSent += entry.bytes_sent || 0;
-    totalBytesReceived += entry.bytes_received || 0;
     totalDuration += entry.duration_ms || 0;
   }
 
@@ -114,8 +107,6 @@ function computeTrafficStats(logs: string[]): TrafficStats {
     errorCount,
     rateLimitedCount,
     blockedCount,
-    totalBytesSent,
-    totalBytesReceived,
     avgDuration: entries.length > 0 ? totalDuration / entries.length : 0,
     topDomains,
     recentErrors: errors.slice(-5).reverse(),
@@ -451,16 +442,9 @@ export default function LogsPage() {
             </div>
           </div>
 
-          {/* Bandwidth */}
-          <div className="flex gap-4 text-sm text-gray-400">
-            <span className="flex items-center gap-1">
-              <ArrowUpRight className="w-4 h-4 text-green-400" />
-              Sent: {formatBytes(trafficStats.totalBytesSent)}
-            </span>
-            <span className="flex items-center gap-1">
-              <ArrowDownRight className="w-4 h-4 text-blue-400" />
-              Received: {formatBytes(trafficStats.totalBytesReceived)}
-            </span>
+          {/* Request count */}
+          <div className="text-sm text-gray-400">
+            {trafficStats.totalRequests} requests
           </div>
         </div>
       )}

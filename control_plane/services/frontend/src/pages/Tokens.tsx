@@ -272,22 +272,22 @@ export function Tokens() {
               className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-dark-100 focus:outline-none focus:border-blue-500"
             >
               <option value="admin">Admin (full management access)</option>
-              <option value="agent">Agent (data plane operations only)</option>
+              <option value="agent">Agent Group (data plane operations only)</option>
             </select>
           </div>
 
           {form.token_type === 'agent' && (
             <div>
-              <label className="block text-sm text-dark-300 mb-1">Agent ID</label>
+              <label className="block text-sm text-dark-300 mb-1">Agent Group ID</label>
               <input
                 type="text"
                 value={form.agent_id}
                 onChange={(e) => setForm({ ...form, agent_id: e.target.value })}
-                placeholder="e.g., agent-prod-01"
+                placeholder="e.g., agent-group-prod-01"
                 className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-dark-100 focus:outline-none focus:border-blue-500"
               />
               <p className="text-xs text-dark-500 mt-1">
-                Token will only work for this specific agent
+                Token will only work for this specific agent group
               </p>
             </div>
           )}
@@ -395,7 +395,7 @@ export function Tokens() {
           <div className="text-sm text-dark-400">
             <p><strong>Name:</strong> {newToken?.name}</p>
             <p><strong>Type:</strong> {newToken?.is_super_admin ? 'Super Admin' : newToken?.token_type}</p>
-            {newToken?.agent_id && <p><strong>Agent ID:</strong> {newToken.agent_id}</p>}
+            {newToken?.agent_id && <p><strong>Agent Group ID:</strong> {newToken.agent_id}</p>}
             {newToken?.tenant_id && !newToken?.is_super_admin && (
               <p><strong>Tenant:</strong> {getTenantName(newToken.tenant_id)}</p>
             )}

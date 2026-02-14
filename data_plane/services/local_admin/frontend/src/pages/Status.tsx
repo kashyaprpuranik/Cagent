@@ -111,11 +111,11 @@ function HealthPanel() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         {data?.checks && (
           <>
-            {/* Agent containers - dynamically discovered by label */}
+            {/* Agent group containers - dynamically discovered by label */}
             {Object.entries(data.checks)
               .filter(([key]) => !['dns-filter', 'http-proxy', 'email-proxy', 'dns_resolution', 'envoy_ready'].includes(key))
               .map(([key, check]) => (
-                <HealthStatus key={key} check={check as HealthCheck} label={`Agent: ${key}`} />
+                <HealthStatus key={key} check={check as HealthCheck} label={`Agent Group: ${key}`} />
               ))}
             <HealthStatus check={data.checks['dns-filter'] || { status: 'missing' }} label="DNS Filter" />
             <HealthStatus check={data.checks['http-proxy'] || { status: 'missing' }} label="HTTP Proxy" />

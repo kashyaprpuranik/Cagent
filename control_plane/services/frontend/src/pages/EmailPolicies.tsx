@@ -69,7 +69,7 @@ export function EmailPolicies() {
   const [formData, setFormData] = useState<FormData>(emptyFormData);
 
   const agentOptions = [
-    { value: '', label: 'Global (all agents)' },
+    { value: '', label: 'Global (all agent groups)' },
     ...agents.map((agent: DataPlane) => ({
       value: agent.agent_id,
       label: agent.agent_id,
@@ -272,7 +272,7 @@ export function EmailPolicies() {
     },
     {
       key: 'agent',
-      header: 'Agent',
+      header: 'Agent Group',
       render: (policy: EmailPolicy) =>
         policy.agent_id ? (
           <Badge variant="info">{policy.agent_id}</Badge>
@@ -339,7 +339,7 @@ export function EmailPolicies() {
               disabled={isEdit}
             />
             <Select
-              label="Agent (optional)"
+              label="Agent Group (optional)"
               options={agentOptions}
               value={formData.agent_id}
               onChange={(e) => setFormData({ ...formData, agent_id: e.target.value })}
@@ -554,7 +554,7 @@ export function EmailPolicies() {
             <Mail size={48} className="mx-auto mb-4 opacity-50" />
             <p>No email policies configured</p>
             <p className="text-sm mt-2">
-              Add email accounts to control agent email access with allowlists and rate limits.
+              Add email accounts to control agent group email access with allowlists and rate limits.
             </p>
           </div>
         )}

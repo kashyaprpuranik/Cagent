@@ -412,9 +412,9 @@ export function Dashboard() {
                     disabled={!agentStatus?.online || agentStatus?.status !== 'running'}
                     title={
                       !agentStatus?.online
-                        ? 'Agent must be online'
+                        ? 'Agent group must be online'
                         : agentStatus?.status !== 'running'
-                        ? 'Agent must be running'
+                        ? 'Agent group must be running'
                         : 'Open Web Terminal'
                     }
                   >
@@ -530,11 +530,11 @@ export function Dashboard() {
       <Modal
         isOpen={wipeModal}
         onClose={() => setWipeModal(false)}
-        title="Wipe Agent Container"
+        title="Wipe Agent Group Container"
       >
         <div className="space-y-4">
           <p className="text-dark-300">
-            This will stop and remove the agent container on <strong>{selectedAgentId}</strong>. It will be recreated automatically.
+            This will stop and remove the agent group container on <strong>{selectedAgentId}</strong>. It will be recreated automatically.
           </p>
 
           <label className="flex items-center gap-2 cursor-pointer">
@@ -549,7 +549,7 @@ export function Dashboard() {
 
           {wipeWorkspace && (
             <p className="text-yellow-400 text-sm">
-              Warning: This will delete all files in the agent workspace.
+              Warning: This will delete all files in the agent group workspace.
             </p>
           )}
 
@@ -562,7 +562,7 @@ export function Dashboard() {
               onClick={handleWipe}
               disabled={wipeAgent.isPending}
             >
-              {wipeAgent.isPending ? 'Wiping...' : 'Wipe Agent'}
+              {wipeAgent.isPending ? 'Wiping...' : 'Wipe Agent Group'}
             </Button>
           </div>
         </div>

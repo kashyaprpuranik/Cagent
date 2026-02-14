@@ -197,7 +197,7 @@ export function IpAcls() {
           <ul className="list-disc list-inside space-y-1">
             <li>If no IP ACLs are configured, all IP addresses are allowed (default behavior)</li>
             <li>Once any IP ACL is added, only matching IPs can access the control plane</li>
-            <li>Agent tokens (used by data planes) are not affected by IP ACLs</li>
+            <li>Agent group tokens (used by data planes) are not affected by IP ACLs</li>
             <li>Use CIDR notation: single IP as x.x.x.x/32, subnet as x.x.x.0/24</li>
           </ul>
         </div>

@@ -99,10 +99,10 @@ def seed_database(reset: bool = False, show_token: bool = False):
             print("Admin token 'default-admin' already exists")
 
         # 3. Test agent (registered and active)
-        existing_agent = db.query(AgentState).filter(AgentState.agent_id == "test-agent").first()
+        existing_agent = db.query(AgentState).filter(AgentState.agent_id == "agent-group-0").first()
         if not existing_agent:
             test_agent = AgentState(
-                agent_id="test-agent",
+                agent_id="agent-group-0",
                 tenant_id=default_tenant.id,
                 status="running",
                 approved=True,
@@ -115,27 +115,27 @@ def seed_database(reset: bool = False, show_token: bool = False):
                 memory_limit_mb=1024
             )
             db.add(test_agent)
-            created.append("Test agent 'test-agent' (registered)")
+            created.append("Test agent 'agent-group-0' (registered)")
         else:
-            print("Test agent 'test-agent' already exists")
+            print("Test agent 'agent-group-0' already exists")
 
-        # 4. Agent token for test-agent (used by data plane heartbeat)
-        existing_agent_token = db.query(ApiToken).filter(ApiToken.name == "test-agent-token").first()
+        # 4. Agent token for agent-group-0 (used by data plane heartbeat)
+        existing_agent_token = db.query(ApiToken).filter(ApiToken.name == "agent-group-0-token").first()
         agent_token_value = None
         if not existing_agent_token:
             agent_token_value = SEED_AGENT_TOKEN
             agent_token = ApiToken(
-                name="test-agent-token",
+                name="agent-group-0-token",
                 token_hash=hash_token(agent_token_value),
                 token_type="agent",
-                agent_id="test-agent",
+                agent_id="agent-group-0",
                 tenant_id=default_tenant.id,
                 enabled=True
             )
             db.add(agent_token)
-            created.append("Agent token 'test-agent-token' for test-agent")
+            created.append("Agent token 'agent-group-0-token' for agent-group-0")
         else:
-            print("Agent token 'test-agent-token' already exists")
+            print("Agent token 'agent-group-0-token' already exists")
 
         db.commit()
 
@@ -161,7 +161,7 @@ def seed_database(reset: bool = False, show_token: bool = False):
             print(f"\nAdmin Token: {admin_token_value}")
 
         if agent_token_value and show_token:
-            print(f"Agent Token (for test-agent): {agent_token_value}")
+            print(f"Agent Token (for agent-group-0): {agent_token_value}")
 
     finally:
         db.close()

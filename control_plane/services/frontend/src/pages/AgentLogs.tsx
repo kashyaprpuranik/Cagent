@@ -82,7 +82,7 @@ export function AgentLogs() {
   }
 
   const agentOptions = [
-    { value: '', label: 'All Agents' },
+    { value: '', label: 'All Agent Groups' },
     ...agents.map((agent) => ({
       value: agent.agent_id,
       label: agent.agent_id,
@@ -142,7 +142,7 @@ export function AgentLogs() {
     },
     {
       key: 'agent',
-      header: 'Agent',
+      header: 'Agent Group',
       className: 'w-28',
       render: (log: LogEntry) => (
         <span className="text-dark-300 text-xs truncate block">{log.agent_id}</span>
@@ -237,8 +237,8 @@ export function AgentLogs() {
           isLoading={isLoading || selectedTenantId === null}
           emptyMessage={
             selectedTenantId === null
-              ? "Select a tenant to view agent logs"
-              : "No logs found. Try adjusting filters or check if agents are running."
+              ? "Select a tenant to view agent group logs"
+              : "No logs found. Try adjusting filters or check if agent groups are running."
           }
         />
 

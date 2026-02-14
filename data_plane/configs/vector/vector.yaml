@@ -77,6 +77,7 @@ transforms:
         .response_code = parsed.response_code
         .duration_ms = parsed.duration
         .bytes_sent = parsed.bytes_sent
+        .bytes_received = parsed.bytes_received
         .request_id = parsed.request_id
 
         if .source == "envoy" && .method != "" {
@@ -177,6 +178,7 @@ transforms:
       if exists(.response_code) { extra.response_code = .response_code }
       if exists(.duration_ms) { extra.duration_ms = .duration_ms }
       if exists(.bytes_sent) { extra.bytes_sent = .bytes_sent }
+      if exists(.bytes_received) { extra.bytes_received = .bytes_received }
       if exists(.request_id) { extra.request_id = .request_id }
       if exists(.syscall) { extra.syscall = .syscall }
       if exists(.syscall_result) { extra.syscall_result = .syscall_result }

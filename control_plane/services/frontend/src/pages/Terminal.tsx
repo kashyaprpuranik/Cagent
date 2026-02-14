@@ -57,9 +57,9 @@ export function Terminal() {
         <Card>
           <div className="text-center py-12 text-dark-400">
             <TerminalIcon size={48} className="mx-auto mb-4 opacity-50" />
-            <p className="text-lg">No agent selected</p>
+            <p className="text-lg">No agent group selected</p>
             <p className="text-sm mt-2">
-              Select an agent from the dashboard to open a terminal session.
+              Select an agent group from the dashboard to open a terminal session.
             </p>
             <Button
               variant="secondary"
@@ -105,7 +105,7 @@ export function Terminal() {
             </h1>
             {!fullscreen && (
               <p className="text-sm text-dark-400">
-                Secure shell access to the agent container
+                Secure shell access to the agent group container
               </p>
             )}
           </div>
@@ -165,18 +165,18 @@ export function Terminal() {
         <Card>
           <div className="text-center py-12 text-dark-400">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dark-400 mx-auto mb-4" />
-            <p>Loading agent status...</p>
+            <p>Loading agent group status...</p>
           </div>
         </Card>
       ) : !isAgentAvailable ? (
         <Card>
           <div className="text-center py-12 text-dark-400">
             <TerminalIcon size={48} className="mx-auto mb-4 opacity-50" />
-            <p className="text-lg">Agent Unavailable</p>
+            <p className="text-lg">Agent Group Unavailable</p>
             <p className="text-sm mt-2">
               {!agentStatus?.online
-                ? 'The agent is offline. Start the agent to access the terminal.'
-                : 'The agent is not running. Start the agent container to access the terminal.'}
+                ? 'The agent group is offline. Start the agent group to access the terminal.'
+                : 'The agent group is not running. Start the agent group container to access the terminal.'}
             </p>
             <div className="mt-4 text-xs text-dark-500">
               Status: {agentStatus?.status || 'unknown'} | Online: {agentStatus?.online ? 'Yes' : 'No'}

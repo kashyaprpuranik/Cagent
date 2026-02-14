@@ -242,7 +242,7 @@ export function SecurityProfiles() {
                   <th className="pb-2 font-medium">Name</th>
                   <th className="pb-2 font-medium">Seccomp</th>
                   <th className="pb-2 font-medium">Resources</th>
-                  <th className="pb-2 font-medium">Agents</th>
+                  <th className="pb-2 font-medium">Agent Groups</th>
                   <th className="pb-2 font-medium">Policies</th>
                   <th className="pb-2 font-medium">Actions</th>
                 </tr>
@@ -312,10 +312,10 @@ export function SecurityProfiles() {
       </Card>
 
       {/* Agent Assignment */}
-      <Card title="Agent Assignment">
+      <Card title="Agent Group Assignment">
         <div className="space-y-4">
           <p className="text-sm text-dark-400">
-            Select agents and assign or unassign a profile in bulk. Each agent will use its assigned profile&apos;s egress policies, runtime settings, and resource limits.
+            Select agent groups and assign a profile in bulk. Each agent group will use its assigned profile&apos;s egress policies, runtime settings, and resource limits.
           </p>
 
           {/* Action bar */}
@@ -346,7 +346,7 @@ export function SecurityProfiles() {
 
           {/* Agent table */}
           {!agents?.length ? (
-            <p className="text-dark-400 text-sm">No agents connected.</p>
+            <p className="text-dark-400 text-sm">No agent groups connected.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -360,7 +360,7 @@ export function SecurityProfiles() {
                         className="rounded border-dark-600 bg-dark-900 text-blue-600 focus:ring-blue-500"
                       />
                     </th>
-                    <th className="pb-2 font-medium">Agent ID</th>
+                    <th className="pb-2 font-medium">Agent Group ID</th>
                     <th className="pb-2 font-medium">Status</th>
                     <th className="pb-2 font-medium">Current Profile</th>
                   </tr>

@@ -79,9 +79,10 @@ docker_client = docker.from_env()
 _command_results_lock = threading.Lock()
 _last_command_results: dict = {}
 
-# Track containers that have profile-based resource limits applied,
-# so we know to clear them when the profile is unassigned.
-_containers_with_resource_limits: set = set()
+# Track which resource fields were set per container by profile-based updates,
+# so we can clear exactly those fields when the profile is unassigned.
+# Maps container name → set of Docker API field names (e.g. {"NanoCPUs", "PidsLimit"}).
+_container_resource_fields: dict = {}
 
 
 # ---------------------------------------------------------------------------
@@ -854,24 +855,44 @@ def _heartbeat_and_handle(container):
                     pids_limit=desired_pids,
                 )
                 if success:
-                    _containers_with_resource_limits.add(container.name)
+                    # Track which fields we set so we can clear exactly those
+                    fields = set()
+                    if desired_cpu is not None:
+                        fields.add("NanoCPUs")
+                    if desired_mem is not None:
+                        fields.update(["Memory", "MemorySwap"])
+                    if desired_pids is not None:
+                        fields.add("PidsLimit")
+                    _container_resource_fields[container.name] = fields
                 with _command_results_lock:
                     _last_command_results[container.name] = {
                         "command": "resource_update",
                         "result": "success" if success else "failed",
                         "message": message,
                     }
-        elif container.name in _containers_with_resource_limits:
-            # Profile unassigned — clear previously applied limits
-            try:
-                logger.info(f"Clearing resource limits on {container.name} (profile unassigned)")
-                data = {"NanoCPUs": 0, "Memory": 0, "MemorySwap": -1, "PidsLimit": 0}
-                url = container.client.api._url('/containers/{0}/update', container.id)
-                res = container.client.api._post_json(url, data=data)
-                container.client.api._result(res, True)
-                _containers_with_resource_limits.discard(container.name)
-            except Exception as e:
-                logger.warning(f"Failed to clear resource limits on {container.name}: {e}")
+        elif container.name in _container_resource_fields:
+            # Profile unassigned — clear only the fields we previously set
+            fields = _container_resource_fields[container.name]
+            clear_data = {}
+            for field in fields:
+                if field == "NanoCPUs":
+                    clear_data["NanoCPUs"] = 0
+                elif field == "Memory":
+                    clear_data["Memory"] = 0
+                elif field == "MemorySwap":
+                    clear_data["MemorySwap"] = 0  # 0 = same as Memory (unlimited)
+                elif field == "PidsLimit":
+                    clear_data["PidsLimit"] = 0
+            if clear_data:
+                try:
+                    logger.info(f"Clearing resource limits on {container.name}: {clear_data}")
+                    url = container.client.api._url('/containers/{0}/update', container.id)
+                    res = container.client.api._post_json(url, data=clear_data)
+                    container.client.api._result(res, True)
+                    logger.info(f"Resource limits cleared on {container.name}")
+                except Exception as e:
+                    logger.error(f"Failed to clear resource limits on {container.name}: {e}")
+            _container_resource_fields.pop(container.name, None)
 
 
 def _check_standalone_seccomp(agents):

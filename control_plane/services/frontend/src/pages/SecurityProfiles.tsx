@@ -197,22 +197,6 @@ export function SecurityProfiles() {
     );
   };
 
-  const handleBulkUnassign = () => {
-    if (selectedAgentIds.size === 0) return;
-    setError(null);
-    bulkAssign.mutate(
-      { agent_ids: Array.from(selectedAgentIds), profile_id: null },
-      {
-        onSuccess: (data) => {
-          setSelectedAgentIds(new Set());
-          setSuccess(`Profile unassigned from ${data.updated.length} agent(s)`);
-          setTimeout(() => setSuccess(null), 3000);
-        },
-        onError: (err) => setError((err as Error).message),
-      }
-    );
-  };
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -358,14 +342,6 @@ export function SecurityProfiles() {
               <Users size={16} />
               Assign Selected ({selectedAgentIds.size})
             </button>
-
-            <button
-              onClick={handleBulkUnassign}
-              disabled={selectedAgentIds.size === 0 || bulkAssign.isPending}
-              className="px-4 py-2 text-sm text-dark-300 border border-dark-600 rounded-lg hover:text-dark-100 hover:border-dark-500 disabled:opacity-50 transition-colors"
-            >
-              Unassign Selected ({selectedAgentIds.size})
-            </button>
           </div>
 
           {/* Agent table */}
@@ -412,11 +388,7 @@ export function SecurityProfiles() {
                         </span>
                       </td>
                       <td className="py-2">
-                        {agent.security_profile_name ? (
-                          <span className="text-dark-200">{agent.security_profile_name}</span>
-                        ) : (
-                          <span className="text-dark-500">None</span>
-                        )}
+                        <span className="text-dark-200">{agent.security_profile_name || 'default'}</span>
                       </td>
                     </tr>
                   ))}

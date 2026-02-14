@@ -2,7 +2,9 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from control_plane.models import Tenant, ApiToken
+from datetime import datetime, timezone
+
+from control_plane.models import Tenant, ApiToken, AgentState
 from control_plane.crypto import hash_token
 
 logger = logging.getLogger(__name__)
@@ -117,5 +119,24 @@ def seed_test_data(db: Session):
             )
             db.add(db_token)
             logger.info(f"Seeded token: {token_def['name']} (roles: {token_def['roles']})")
+
+    # Seed placeholder agents for the default tenant (for profile assignment UI)
+    seed_agents = [
+        {"agent_id": "agent-1", "tenant_id": default_tenant_id},
+        {"agent_id": "agent-2", "tenant_id": default_tenant_id},
+    ]
+    for agent_def in seed_agents:
+        existing = db.query(AgentState).filter(AgentState.agent_id == agent_def["agent_id"]).first()
+        if not existing:
+            agent = AgentState(
+                agent_id=agent_def["agent_id"],
+                tenant_id=agent_def["tenant_id"],
+                status="unknown",
+                approved=True,
+                approved_at=datetime.now(timezone.utc),
+                approved_by="seed-script",
+            )
+            db.add(agent)
+            logger.info(f"Seeded agent: {agent_def['agent_id']}")
 
     db.commit()

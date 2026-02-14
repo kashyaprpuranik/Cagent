@@ -75,7 +75,53 @@ Unhandled exceptions are sent as the WebSocket close reason. Python exception me
 }
 ```
 
-The Envoy admin interface exposes runtime configuration, stats, and cluster management endpoints. Binding to `0.0.0.0` means any container on the Docker network (including the agent) can reach it. An agent could use the admin API to modify routes, dump configurations, or shut down the proxy. This should be bound to `127.0.0.1` or disabled.
+The Envoy admin interface exposes runtime configuration, stats, and cluster management endpoints. Binding to `0.0.0.0` means any container on the Docker network (including the agent) can reach it at `http://10.200.1.10:9901`.
+
+This is the **single most critical issue** in the repo because it collapses a core security claim. Credentials are embedded as plaintext in the Lua filter code (line 551 of `config_generator.py`: `local static_credentials = {self._lua_table(credentials)}`). An agent can call `GET /config_dump` to extract the full Envoy config including all API keys. It can also call `POST /logging?level=off` to disable audit logging, or `POST /quitquitquit` to shut down the proxy.
+
+The agent container does **not** mount the `proxy-config` volume, so the admin API is the only exposure path. Binding to `127.0.0.1` closes this entirely.
+
+### HIGH: Lua Table Generator Does Not Escape Strings
+
+**File:** `data_plane/services/agent_manager/config_generator.py:693-709`
+
+```python
+def _lua_table(self, d: dict) -> str:
+    for k, v in d.items():
+        if isinstance(v, str):
+            items.append(f'["{k}"] = "{v}"')  # No escaping of quotes or backslashes
+```
+
+Credential values from environment variables are embedded into Lua code via `_lua_table()` without escaping double quotes, backslashes, or newlines. If a credential value contains a `"`, the generated Lua syntax breaks. In the worst case, a carefully crafted credential value could inject arbitrary Lua code that executes inside Envoy's Lua filter.
+
+The practical risk depends on who controls the environment variables — typically the operator, not the agent. But in connected mode where the control plane provides credential values that get decrypted and interpolated, a compromised credential store could become a code execution vector. At minimum, `_lua_table` should escape `"`, `\`, and newlines in string values.
+
+### HIGH: WebSocket Ticket TOCTOU Race Condition
+
+**File:** `control_plane/services/backend/control_plane/routes/terminal.py:124-139`
+
+```python
+if ticket.used:                    # Check
+    await websocket.close(...)
+    return
+# ... other validation ...
+ticket.used = True                 # Use
+db.commit()
+```
+
+The single-use ticket validation has a time-of-check-time-of-use gap. Two concurrent WebSocket connections with the same ticket can both pass the `ticket.used` check before either commits the update. This allows a single-use ticket to open multiple terminal sessions. Fix: use an atomic `UPDATE ... WHERE used = False` and check the affected row count.
+
+### MEDIUM: Token Name Uniqueness Leaks Cross-Tenant Information
+
+**File:** `control_plane/services/backend/control_plane/routes/tokens.py:117-119`
+
+```python
+existing = db.query(ApiToken).filter(ApiToken.name == body.name).first()
+if existing:
+    raise HTTPException(status_code=400, detail="Token with this name already exists")
+```
+
+The uniqueness check queries all tokens globally, not scoped to the current tenant. A tenant admin can probe whether a specific token name exists in any other tenant by attempting to create a token with that name and observing the 400 response. This leaks cross-tenant token naming patterns. The filter should include `ApiToken.tenant_id == token_info.tenant_id`.
 
 ### MEDIUM: Token Hash Uses SHA-256 Without Salt
 
@@ -179,11 +225,21 @@ This section covers what Cagent shows its users (tenant admins, agent developers
 - **No configuration validation.** `cagent.yaml` is parsed with `yaml.safe_load()` but there is no schema validation. A typo in a domain name, missing required field, or wrong type silently produces broken CoreDNS/Envoy configs that fail at runtime. Users get no feedback at save-time — they discover the breakage minutes later when the agent can't reach anything.
 - **Config changes require container restarts.** When `cagent.yaml` changes, the agent manager regenerates CoreDNS and Envoy configs, but the services need to restart to pick them up. For a developer iterating on allowlist policies, this adds a ~10-second wait-and-check cycle every time.
 - **No diff preview for policy changes.** When the control plane pushes new domain policies, the data plane applies them immediately. There is no "here's what will change" preview. An accidental removal of a critical domain from the allowlist takes effect instantly with no confirmation.
+- **`bytes_per_hour` accepts input but does nothing.** The domain policy form accepts a `bytes_per_hour` value and the UI displays it, but it is not enforced in the Envoy proxy. Users configure egress quotas thinking they're active, then discover later that there's no actual limit. The UI should either enforce it or not show the field.
 
 ### Agent Developer Experience
 
 - **No way for agents to introspect their own permissions.** An agent running inside Cagent has no API or CLI to ask "can I reach api.github.com?" or "what rate limit applies to me?" Developers discover permission gaps at runtime when requests fail, then context-switch to the admin UI to diagnose.
 - **Email proxy is undiscoverable.** The email proxy supports Gmail, Outlook, and generic IMAP/SMTP, but there is no user-facing documentation on how to configure OAuth credentials, set up recipient allowlists, or verify email delivery is working.
+
+### Control Plane UI Polish
+
+- **Login error conflates two causes.** Invalid token and unreachable API both show "Invalid token or API unreachable." These are very different problems (bad credential vs network issue) and should be distinguished.
+- **No expiring-soon indicator for tokens.** The tokens table shows `expires_at` but doesn't highlight tokens expiring within 7 days. In a deployment with 20+ tokens, an approaching expiry is invisible until authentication starts failing.
+- **`burst_size` is unexplained.** The rate limiting form accepts `burst_size` but nowhere explains what it means. Users may set it to 1 thinking "strict" when it actually means "allow 1 request to go through even when the bucket is empty."
+- **No unsaved-changes warning.** Navigating away from a partially-filled policy form silently discards all input. No "you have unsaved changes" prompt.
+- **Inconsistent pagination.** Audit Trail has proper pagination with prev/next. Tokens, Domain Policies, and Tenants show all items in a flat list with no pagination or sorting. This breaks down with 100+ entries.
+- **No "last modified by" on policies.** Domain policies show `updated_at` but not who made the change. Users must cross-reference the audit trail on a separate page to determine authorship.
 
 ---
 
@@ -193,8 +249,11 @@ This section covers what Cagent shows its users (tenant admins, agent developers
 
 | Priority | Item | Rationale |
 |----------|------|-----------|
-| P0 | Bind Envoy admin to 127.0.0.1 | Prevents agent from manipulating proxy |
-| P0 | Sanitize WebSocket close reasons | Prevents internal state leakage |
+| P0 | Bind Envoy admin to 127.0.0.1 | Prevents agent from dumping credentials, disabling logging, and shutting down proxy |
+| P0 | Escape strings in `_lua_table()` | Prevents Lua syntax breakage and potential code injection from credential values |
+| P0 | Atomic WebSocket ticket consumption | Fix TOCTOU race that allows single-use tickets to open multiple sessions |
+| P1 | Sanitize WebSocket close reasons | Prevents internal state leakage |
+| P1 | Scope token name uniqueness to tenant | Prevents cross-tenant information leakage via name probing |
 | P1 | Harden log query SQL construction (`match_all()` + enum validation) | Reduces intra-tenant injection surface |
 
 ### Phase 2: Product Observability
@@ -214,10 +273,14 @@ This section covers what Cagent shows its users (tenant admins, agent developers
 | Priority | Item | Rationale |
 |----------|------|-----------|
 | P1 | Config validation with clear error messages | Users currently get silent breakage from typos in `cagent.yaml`; a schema check at save-time would catch this |
+| P1 | Hide or enforce `bytes_per_hour` | UI accepts the value but proxy doesn't enforce it — users think they have egress limits when they don't |
 | P2 | `cagent init` CLI wizard | Guided setup instead of manual YAML editing |
 | P2 | Policy diff preview (dry-run mode) | "Here's what will change" before applying — prevents accidental lockouts |
 | P2 | Agent introspection SDK / CLI | Let agents ask "can I reach X?" and "what rate limit applies?" without leaving the sandbox |
 | P2 | Hot-reload for CoreDNS/Envoy configs | Eliminate the restart-and-wait cycle when iterating on policies |
+| P2 | Distinguish login error causes | "Invalid token" vs "API unreachable" — currently conflated into one message |
+| P2 | Token expiry warnings | Highlight tokens expiring within 7 days so operators rotate before outages |
+| P3 | Pagination on all list views | Tokens, policies, and tenants don't paginate — breaks with 100+ entries |
 | P3 | Email proxy documentation and setup wizard | The feature exists but is undiscoverable |
 | P3 | Agent variant documentation | Clarify what lean/dev/ml include and how to customize |
 
@@ -237,4 +300,4 @@ This section covers what Cagent shows its users (tenant admins, agent developers
 
 Cagent addresses a real and growing need with a well-designed multi-layered security architecture. The core concept — treating AI agents as untrusted by default and mediating all network access through controlled proxies — is sound. The trust model is well-considered: the local admin is intentionally unauthenticated (operator already owns the host), and the SQL construction risk in log queries is bounded by per-tenant OpenObserve org isolation.
 
-The highest-leverage investments are in **product observability** — the logging infrastructure captures the right data, but users lack the views to act on it. A deny-reason header, rate limit gauges, and credential usage counters would transform the debugging and security monitoring experience. On the usability side, config validation at save-time and an agent introspection API would eliminate the most common friction points in the daily workflow.
+The most urgent work is **security**: the Envoy admin exposure (P0) is the single issue that collapses the "agent can't see credentials" claim, and the Lua string escaping and WebSocket ticket race should be fixed alongside it. After that, the highest-leverage investments are in **product observability** — the logging infrastructure captures the right data, but users lack the views to act on it. A deny-reason header, rate limit gauges, and credential usage counters would transform the debugging and security monitoring experience. On the **usability** side, config validation at save-time, hiding unenforced `bytes_per_hour`, and distinguishing login errors would eliminate the most common friction points.

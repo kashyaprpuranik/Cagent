@@ -242,7 +242,7 @@ npm run lint
 - The CP backend listens on port 8000 internally but is mapped to 8002 on the host
 - `cagent.yaml` and `Corefile` are modified at runtime by agent-manager; DP E2E tests back up and restore these files
 - The `SEED_TOKENS` env var triggers pre-seeding on startup. Seed tokens are deterministic and must never be used in production
-- Token cache (in-memory, 60s TTL) in `auth.py` can cause stale state in tests if not cleared
+- All caches (token, IP ACL, agent state, security profile, domain policy) use `LayeredCache` in `cache.py` and must be cleared between tests — see `conftest.py`
 - OpenObserve uses a distroless image with no shell, so Docker healthchecks are not available for it
 - Frontend lint runs with `--max-warnings 0`; any ESLint warning fails the build
 - E2E tests start/stop Docker containers and require Docker socket access

@@ -138,17 +138,13 @@ The system is well-architected for small deployments (10–50 agents) but faces 
 
 ### 3.1 Control Plane Bottlenecks
 
-#### 3.1.1 In-Memory Token Cache (CRITICAL)
+#### 3.1.1 Token Cache (CRITICAL) — Resolved
 
-**Location**: `control_plane/services/backend/control_plane/auth.py`
+**Location**: `control_plane/services/backend/control_plane/cache.py`, `auth.py`
 
-The token verification cache is a per-worker Python dict protected by a `threading.Lock`. Cache is per-worker: scaling to multiple FastAPI workers means each maintains a separate cache with no shared invalidation. Token revocation in one worker is invisible to others until TTL (60s) expires. No size limit or LRU eviction.
+Previously a per-worker Python dict with no shared invalidation across workers. Token revocation was invisible to other workers until TTL expired.
 
-**Status**: The `LayeredCache` infrastructure is now in place (used by the IP ACL cache). Migrating the token cache to LayeredCache is a follow-up — it requires careful handling of the `last_used_at` batching logic at the call site.
-
-**Impact at scale**: With 100k unique token lookups in a 60s window, estimated ~830MB memory growth. Cache invalidation failure means revoked tokens remain valid for up to 60 seconds across workers.
-
-**Recommendation**: Migrate token cache to `LayeredCache` (follow-up PR). Use read-write lock if keeping in-memory temporarily.
+**Status**: **Resolved.** Now uses `LayeredCache` with memory (60s) and Redis (60s) layers. Invalidation on token delete/disable clears both layers across all workers. `last_used_at` writes are coalesced via `ThrottledWriter` (once per 10 minutes per token).
 
 #### 3.1.2 IP ACL Verification (HIGH) — Resolved
 
@@ -158,11 +154,11 @@ Previously fetched ALL ACLs for the tenant from DB on every admin request, then 
 
 **Status**: **Resolved.** Now uses `LayeredCache` with memory (60s TTL) and Redis (300s TTL) layers, falling back to DB on miss. Invalidation on ACL create/update/delete clears both layers.
 
-#### 3.1.3 Synchronous Last-Used Token Updates (MEDIUM)
+#### 3.1.3 Synchronous Last-Used Token Updates (MEDIUM) — Partially Resolved
 
-Token `last_used_at` DB writes happen synchronously inline with request processing every 10 minutes per token. At 1000 concurrent tokens, this generates ~16 DB writes/sec of bookkeeping traffic.
+Token `last_used_at` DB writes are now coalesced via `ThrottledWriter` (at most once per 10 minutes per token), reducing bookkeeping traffic significantly. Writes are still synchronous and inline with request processing.
 
-**Recommendation**: Move `last_used_at` updates to an async background batch job.
+**Recommendation**: For further optimization, move remaining writes to an async background batch job.
 
 #### 3.1.4 In-Memory Rate Limiter (MEDIUM)
 

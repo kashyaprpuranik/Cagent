@@ -1,6 +1,6 @@
 {
   "defaultAction": "SCMP_ACT_ALLOW",
-  "comment": "Permissive profile: allow all syscalls, only block raw socket creation (AF_RAW). For debugging only.",
+  "comment": "WARNING: This profile effectively disables seccomp sandboxing. The agent container can invoke arbitrary syscalls including ptrace, mount, unshare, and setns — all of which are container-escape primitives. Use ONLY for temporary debugging of syscall-related failures. Switch back to 'standard' or 'hardened' immediately after. NEVER use in production.",
   "syscalls": [
     {
       "names": ["socket"],

@@ -1,7 +1,5 @@
 import ipaddress
 import logging
-import threading
-import time as _time
 from datetime import datetime, timezone
 from typing import Optional, List
 
@@ -13,90 +11,36 @@ from control_plane.database import get_db
 from control_plane.models import ApiToken, AgentState, TenantIpAcl
 from control_plane.crypto import hash_token
 from control_plane.config import TRUSTED_PROXY_COUNT
+from control_plane.cache import LayeredCache, token_cache, last_used_writer
 
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
 
 # ---------------------------------------------------------------------------
-# Token verification cache
-# ---------------------------------------------------------------------------
-# Maps token_hash -> (TokenInfo, cached_at_monotonic, last_db_write_monotonic)
-# TTL: 60 s — avoids a DB round-trip on every request.
-# last_used_at is only flushed to the DB when the previous write was >10 min ago.
-#
-# TODO: Move to Redis so invalidation works across multiple API workers.
-# ---------------------------------------------------------------------------
-_TOKEN_CACHE_TTL = 60          # seconds
-_LAST_USED_WRITE_INTERVAL = 600  # 10 minutes
-
-_token_cache: dict = {}        # token_hash -> (TokenInfo, float, float)
-_token_cache_lock = threading.Lock()
-
-# ---------------------------------------------------------------------------
 # IP ACL cache — avoids a DB query on every admin request.
-# Maps tenant_id -> (list[cidr_str], cached_at_monotonic)
+# Uses LayeredCache: memory (60s) -> Redis (300s) -> DB loader.
 # ---------------------------------------------------------------------------
-_IP_ACL_CACHE_TTL = 60         # seconds
-
-_ip_acl_cache: dict = {}       # tenant_id -> ([cidr, ...], float)
-_ip_acl_cache_lock = threading.Lock()
-
-
-def invalidate_token_cache(token_hash: str) -> None:
-    """Remove a token from the in-memory verification cache.
-
-    Call this when a token is deleted, disabled, or modified.
-    For Redis invalidation, use ``invalidate_token_cache_async``.
-    """
-    with _token_cache_lock:
-        _token_cache.pop(token_hash, None)
+ip_acl_cache = LayeredCache("ip_acl", memory_ttl=60, redis_ttl=300)
 
 
 async def invalidate_token_cache_async(token_hash: str, redis_client) -> None:
     """Remove a token from both in-memory and Redis caches."""
-    invalidate_token_cache(token_hash)
-    from control_plane.redis_client import delete_cached_token
-    await delete_cached_token(redis_client, token_hash)
+    await token_cache.invalidate(token_hash, redis_client)
+    last_used_writer.remove(token_hash)
 
 
 def clear_token_cache() -> None:
     """Remove all entries — useful in tests."""
-    with _token_cache_lock:
-        _token_cache.clear()
+    token_cache.clear()
+    last_used_writer.clear()
 
 
-def invalidate_ip_acl_cache(tenant_id: int) -> None:
-    """Remove cached IP ACLs for a tenant. Call on ACL create/update/delete."""
-    with _ip_acl_cache_lock:
-        _ip_acl_cache.pop(tenant_id, None)
-
-
-def clear_ip_acl_cache() -> None:
-    """Remove all IP ACL cache entries — useful in tests."""
-    with _ip_acl_cache_lock:
-        _ip_acl_cache.clear()
-
-
-def _get_cached_ip_acls(tenant_id: int, db: Session) -> list:
-    """Return list of CIDR strings for a tenant, from cache or DB."""
-    now = _time.monotonic()
-    with _ip_acl_cache_lock:
-        entry = _ip_acl_cache.get(tenant_id)
-        if entry and (now - entry[1]) < _IP_ACL_CACHE_TTL:
-            return entry[0]
-
-    cidrs = [
-        acl.cidr for acl in db.query(TenantIpAcl).filter(
-            TenantIpAcl.tenant_id == tenant_id,
-            TenantIpAcl.enabled == True
-        ).all()
-    ]
-
-    with _ip_acl_cache_lock:
-        _ip_acl_cache[tenant_id] = (cidrs, now)
-
-    return cidrs
+def _get_redis_client(request: Request):
+    """Extract the Redis client from the request's app state, or None."""
+    app = getattr(request, "app", None)
+    state = getattr(app, "state", None) if app else None
+    return getattr(state, "redis", None) if state else None
 
 
 class TokenInfo:
@@ -156,118 +100,89 @@ async def verify_token(
 ) -> TokenInfo:
     """Verify token and return token info with type and permissions.
 
-    Lookup order:
-    1. Redis cache (shared across workers) — fastest
-    2. In-memory cache (per-worker fallback when Redis unavailable)
+    Lookup order (via LayeredCache):
+    1. In-memory cache (per-worker, 60 s TTL)
+    2. Redis cache (shared across workers, 60 s TTL)
     3. DB lookup — populates both caches on miss
 
-    ``last_used_at`` is only flushed to the DB when the previous
-    write was more than 10 minutes ago.
+    ``last_used_at`` is flushed to DB at most once per 10 minutes
+    (via ThrottledWriter).
     """
     if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     token = credentials.credentials
     token_hash_value = hash_token(token)
-    now = _time.monotonic()
+    redis_client = _get_redis_client(request)
 
-    # --- Redis cache lookup ---
-    app = getattr(request, "app", None)
-    state = getattr(app, "state", None) if app else None
-    redis_client = getattr(state, "redis", None) if state else None
-    from control_plane.redis_client import get_cached_token_info, cache_token_info
+    info_dict = await token_cache.get(
+        token_hash_value, redis_client,
+        loader=lambda: _load_token_from_db(db, token_hash_value)
+    )
+    info = TokenInfo.from_dict(info_dict)
 
-    redis_hit = await get_cached_token_info(redis_client, token_hash_value)
-    if redis_hit is not None:
-        info = TokenInfo.from_dict(redis_hit)
-        # Lazily update last_used_at if stale
-        with _token_cache_lock:
-            cached = _token_cache.get(token_hash_value)
-        last_write = cached[2] if cached else 0
-        if now - last_write >= _LAST_USED_WRITE_INTERVAL:
-            db.execute(
-                ApiToken.__table__.update()
-                .where(ApiToken.token_hash == token_hash_value)
-                .values(last_used_at=datetime.now(timezone.utc))
-            )
-            db.commit()
-            with _token_cache_lock:
-                _token_cache[token_hash_value] = (info, now, now)
-        elif cached is None:
-            with _token_cache_lock:
-                _token_cache[token_hash_value] = (info, now, last_write)
-        return info
+    # Throttled last_used_at update — once per 10 minutes per token
+    if last_used_writer.should_write(token_hash_value):
+        db.execute(
+            ApiToken.__table__.update()
+            .where(ApiToken.token_hash == token_hash_value)
+            .values(last_used_at=datetime.now(timezone.utc))
+        )
+        db.commit()
 
-    # --- In-memory cache lookup (fallback when Redis is None) ---
-    with _token_cache_lock:
-        cached = _token_cache.get(token_hash_value)
-    if cached is not None:
-        info, cached_at, last_write = cached
-        if now - cached_at < _TOKEN_CACHE_TTL:
-            # Lazily update last_used_at if stale
-            if now - last_write >= _LAST_USED_WRITE_INTERVAL:
-                db.execute(
-                    ApiToken.__table__.update()
-                    .where(ApiToken.token_hash == token_hash_value)
-                    .values(last_used_at=datetime.now(timezone.utc))
-                )
-                db.commit()
-                with _token_cache_lock:
-                    _token_cache[token_hash_value] = (info, cached_at, now)
-            return info
+    return info
 
-    # --- cache miss: full DB lookup ---
+
+def _load_token_from_db(db: Session, token_hash_value: str) -> dict:
+    """Cache-miss loader: look up token in DB and return serializable dict.
+
+    Raises HTTPException(403) for invalid or expired tokens.
+    Writes ``last_used_at`` on first load and records the write in
+    the throttled writer so it isn't repeated for 10 minutes.
+    """
     db_token = db.query(ApiToken).filter(
         ApiToken.token_hash == token_hash_value,
         ApiToken.enabled == True
     ).first()
 
-    if db_token:
-        # Check expiry (handle naive datetimes from legacy DB entries)
-        token_exp = db_token.expires_at
-        if token_exp and token_exp.tzinfo is None:
-            token_exp = token_exp.replace(tzinfo=timezone.utc)
-        if token_exp and token_exp < datetime.now(timezone.utc):
-            raise HTTPException(status_code=403, detail="Token expired")
+    if not db_token:
+        raise HTTPException(status_code=403, detail="Invalid token")
 
-        # Update last used timestamp
-        db_token.last_used_at = datetime.now(timezone.utc)
-        db.commit()
+    # Check expiry (handle naive datetimes from legacy DB entries)
+    token_exp = db_token.expires_at
+    if token_exp and token_exp.tzinfo is None:
+        token_exp = token_exp.replace(tzinfo=timezone.utc)
+    if token_exp and token_exp < datetime.now(timezone.utc):
+        raise HTTPException(status_code=403, detail="Token expired")
 
-        # For agent tokens, get tenant_id from the agent
-        tenant_id = db_token.tenant_id
-        if db_token.token_type == "agent" and db_token.agent_id:
-            agent = db.query(AgentState).filter(AgentState.agent_id == db_token.agent_id).first()
-            if agent:
-                tenant_id = agent.tenant_id
+    # Update last used timestamp (first access after cache miss)
+    db_token.last_used_at = datetime.now(timezone.utc)
+    db.commit()
+    last_used_writer.mark_written(token_hash_value)
 
-        # Parse roles (comma-separated string to list)
-        # Empty string = no roles; None = backwards-compat default to admin
-        if db_token.roles is not None:
-            roles = [r for r in db_token.roles.split(",") if r]
-        else:
-            roles = ["admin"]
+    # For agent tokens, get tenant_id from the agent
+    tenant_id = db_token.tenant_id
+    if db_token.token_type == "agent" and db_token.agent_id:
+        agent = db.query(AgentState).filter(AgentState.agent_id == db_token.agent_id).first()
+        if agent:
+            tenant_id = agent.tenant_id
 
-        info = TokenInfo(
-            token_type=db_token.token_type,
-            agent_id=db_token.agent_id,
-            token_name=db_token.name,
-            tenant_id=tenant_id,
-            is_super_admin=db_token.is_super_admin or False,
-            roles=roles,
-            api_token_id=db_token.id,
-        )
+    # Parse roles (comma-separated string to list)
+    # Empty string = no roles; None = backwards-compat default to admin
+    if db_token.roles is not None:
+        roles = [r for r in db_token.roles.split(",") if r]
+    else:
+        roles = ["admin"]
 
-        # Populate in-memory cache
-        with _token_cache_lock:
-            _token_cache[token_hash_value] = (info, now, now)
-
-        # Populate Redis cache (non-blocking, failure is safe)
-        await cache_token_info(redis_client, token_hash_value, info.to_dict())
-
-        return info
-
-    raise HTTPException(status_code=403, detail="Invalid token")
+    return TokenInfo(
+        token_type=db_token.token_type,
+        agent_id=db_token.agent_id,
+        token_name=db_token.name,
+        tenant_id=tenant_id,
+        is_super_admin=db_token.is_super_admin or False,
+        roles=roles,
+        api_token_id=db_token.id,
+    ).to_dict()
 
 
 async def require_agent(token_info: TokenInfo = Depends(verify_token)) -> TokenInfo:
@@ -384,8 +299,18 @@ async def verify_ip_acl(
     if token_info.token_type != "admin" or not token_info.tenant_id:
         return token_info
 
-    # Get enabled IP ACLs for this tenant (cached, 60s TTL)
-    cidrs = _get_cached_ip_acls(token_info.tenant_id, db)
+    # Get enabled IP ACLs for this tenant (LayeredCache: memory -> Redis -> DB)
+    redis_client = _get_redis_client(request)
+    cidrs = await ip_acl_cache.get(
+        str(token_info.tenant_id),
+        redis_client,
+        loader=lambda: [
+            acl.cidr for acl in db.query(TenantIpAcl).filter(
+                TenantIpAcl.tenant_id == token_info.tenant_id,
+                TenantIpAcl.enabled == True
+            ).all()
+        ]
+    )
 
     # No ACLs configured = allow all (backwards compatible)
     if not cidrs:

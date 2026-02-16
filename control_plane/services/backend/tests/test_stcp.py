@@ -4,16 +4,16 @@
 class TestSTCPEndpoints:
     """Test STCP secret generation and config retrieval."""
 
-    def _create_agent(self, client, auth_headers, agent_id):
-        """Helper: create agent via heartbeat."""
+    def _provision_agent(self, client, auth_headers, agent_id):
+        """Helper: provision an agent via token creation."""
         client.post(
-            f"/api/v1/agent/heartbeat?agent_id={agent_id}",
+            "/api/v1/tokens",
             headers=auth_headers,
-            json={"status": "running"}
+            json={"name": f"{agent_id}-provision-token", "token_type": "agent", "agent_id": agent_id},
         )
 
     def _create_agent_token(self, client, auth_headers, agent_id):
-        """Helper: create agent token and return headers."""
+        """Helper: create agent token (also provisions agent) and return headers."""
         token_response = client.post(
             "/api/v1/tokens",
             headers=auth_headers,
@@ -24,7 +24,7 @@ class TestSTCPEndpoints:
 
     def test_generate_stcp_secret(self, client, auth_headers):
         """Should generate STCP secret for an agent."""
-        self._create_agent(client, auth_headers, "stcp-test-agent")
+        self._provision_agent(client, auth_headers, "stcp-test-agent")
 
         response = client.post(
             "/api/v1/agents/stcp-test-agent/stcp-secret",
@@ -47,7 +47,7 @@ class TestSTCPEndpoints:
 
     def test_generate_stcp_secret_from_token(self, client, auth_headers):
         """Should generate STCP secret using agent token (token-derived endpoint)."""
-        self._create_agent(client, auth_headers, "stcp-token-agent")
+        self._provision_agent(client, auth_headers, "stcp-token-agent")
         agent_headers = self._create_agent_token(client, auth_headers, "stcp-token-agent")
 
         response = client.post(
@@ -72,7 +72,7 @@ class TestSTCPEndpoints:
 
     def test_get_stcp_config(self, client, auth_headers, super_admin_headers):
         """Should return STCP visitor config after secret is generated."""
-        self._create_agent(client, auth_headers, "stcp-config-agent")
+        self._provision_agent(client, auth_headers, "stcp-config-agent")
 
         # Generate secret first (admin role)
         client.post("/api/v1/agents/stcp-config-agent/stcp-secret", headers=auth_headers)
@@ -91,7 +91,7 @@ class TestSTCPEndpoints:
 
     def test_get_stcp_config_without_secret(self, client, auth_headers, super_admin_headers):
         """Should return 404 when no secret has been generated."""
-        self._create_agent(client, auth_headers, "stcp-no-secret-agent")
+        self._provision_agent(client, auth_headers, "stcp-no-secret-agent")
 
         response = client.get(
             "/api/v1/agents/stcp-no-secret-agent/stcp-config",

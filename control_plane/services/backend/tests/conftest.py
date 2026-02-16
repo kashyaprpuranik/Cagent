@@ -92,7 +92,8 @@ def client(engine, db_session):
     """Create FastAPI test client with test database."""
     import main
     from control_plane.rate_limit import limiter
-    from control_plane.auth import clear_token_cache, clear_ip_acl_cache
+    from control_plane.auth import clear_token_cache, ip_acl_cache
+    from control_plane.cache import security_profile_cache, agent_state_cache, domain_policy_cache
 
     # Disable rate limiting in tests
     limiter.enabled = False
@@ -100,7 +101,10 @@ def client(engine, db_session):
     # Clear caches so stale entries from a previous test
     # (whose DB tables have been dropped) don't bleed over.
     clear_token_cache()
-    clear_ip_acl_cache()
+    ip_acl_cache.clear()
+    security_profile_cache.clear()
+    agent_state_cache.clear()
+    domain_policy_cache.clear()
 
     # Override the get_db dependency to use our test session
     def override_get_db():
@@ -119,7 +123,10 @@ def client(engine, db_session):
 
     main.app.dependency_overrides.clear()
     clear_token_cache()
-    clear_ip_acl_cache()
+    ip_acl_cache.clear()
+    security_profile_cache.clear()
+    agent_state_cache.clear()
+    domain_policy_cache.clear()
     limiter.enabled = True
 
 

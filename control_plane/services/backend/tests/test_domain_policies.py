@@ -349,12 +349,7 @@ class TestProfileScopedDomainPolicies:
 
     def test_agent_token_sees_profile_policies(self, client, auth_headers):
         """Agent token should see policies from its assigned profile."""
-        # Create agent and get a token for it
-        client.post(
-            "/api/v1/agent/heartbeat?agent_id=dp-profile-agent",
-            headers=auth_headers,
-            json={"status": "running"}
-        )
+        # Create agent token (which auto-provisions the agent)
         token_response = client.post(
             "/api/v1/tokens",
             headers=auth_headers,
@@ -424,12 +419,7 @@ class TestProfileScopedDomainPolicies:
 
     def test_agent_falls_back_to_default_profile(self, client, auth_headers):
         """Agent without assigned profile should see policies from 'default' profile."""
-        # Create agent and get a token for it
-        client.post(
-            "/api/v1/agent/heartbeat?agent_id=dp-default-agent",
-            headers=auth_headers,
-            json={"status": "running"}
-        )
+        # Create agent token (which auto-provisions the agent)
         token_response = client.post(
             "/api/v1/tokens",
             headers=auth_headers,

@@ -5,11 +5,11 @@ class TestSecuritySettings:
     """Test security settings GET/PUT endpoints."""
 
     def _create_agent(self, client, auth_headers, agent_id="sec-agent"):
-        """Helper: create an agent via heartbeat."""
+        """Helper: provision an agent via token creation."""
         client.post(
-            f"/api/v1/agent/heartbeat?agent_id={agent_id}",
+            "/api/v1/tokens",
             headers=auth_headers,
-            json={"status": "running"},
+            json={"name": f"{agent_id}-token", "token_type": "agent", "agent_id": agent_id},
         )
 
     def test_default_profile_is_standard(self, client, auth_headers):

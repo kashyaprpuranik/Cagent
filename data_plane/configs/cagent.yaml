@@ -30,7 +30,7 @@ rate_limits:
 
 # Container security settings
 security:
-  seccomp_profile: standard  # standard, hardened, permissive
+  seccomp_profile: standard  # standard (dev), hardened (prod). permissive exists but disables sandboxing — debug only
 
 # Container resource limits (standalone mode)
 # Omit or set to null to use docker-compose defaults

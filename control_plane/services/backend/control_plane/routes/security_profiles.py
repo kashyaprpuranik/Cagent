@@ -12,9 +12,9 @@ from control_plane.schemas import (
     SecurityProfileCreate, SecurityProfileUpdate, SecurityProfileResponse,
     AgentProfileAssignment, BulkAgentProfileAssignment,
 )
-from control_plane.auth import TokenInfo, require_admin_role, require_admin_role_with_ip_check
+from control_plane.auth import TokenInfo, require_admin_role, require_admin_role_with_ip_check, _get_redis_client
+from control_plane.cache import security_profile_cache, agent_state_cache, domain_policy_cache
 from control_plane.rate_limit import limiter
-from control_plane.redis_client import invalidate_domain_policy_cache
 
 router = APIRouter()
 
@@ -216,8 +216,9 @@ async def update_security_profile(
     db.commit()
     db.refresh(profile)
 
-    redis_client = getattr(request.app.state, "redis", None)
-    await invalidate_domain_policy_cache(redis_client, profile.tenant_id)
+    redis_client = _get_redis_client(request)
+    await domain_policy_cache.invalidate_by_prefix(f"tenant:{profile.tenant_id}:", redis_client)
+    await security_profile_cache.invalidate(str(profile_id), redis_client)
 
     return _profile_to_response(profile, *_batch_counts(db, [profile.id]))
 
@@ -246,6 +247,12 @@ async def delete_security_profile(
     if policy_count > 0:
         raise HTTPException(status_code=400, detail="Cannot delete profile with associated policies")
 
+    # Find agents that will be reassigned (for cache invalidation)
+    affected_agents = db.query(AgentState.agent_id).filter(
+        AgentState.security_profile_id == profile_id,
+        AgentState.deleted_at.is_(None),
+    ).all()
+
     # Reassign agents to the "default" profile (or unassign if no default exists)
     default_profile = db.query(SecurityProfile).filter(
         SecurityProfile.name == "default",
@@ -273,8 +280,11 @@ async def delete_security_profile(
     db.add(log)
     db.commit()
 
-    redis_client = getattr(request.app.state, "redis", None)
-    await invalidate_domain_policy_cache(redis_client, tenant_id)
+    redis_client = _get_redis_client(request)
+    await domain_policy_cache.invalidate_by_prefix(f"tenant:{tenant_id}:", redis_client)
+    await security_profile_cache.invalidate(str(profile_id), redis_client)
+    for (aid,) in affected_agents:
+        await agent_state_cache.invalidate(aid, redis_client)
 
     return {"deleted": True, "id": profile_id}
 
@@ -321,8 +331,9 @@ async def assign_agent_profile(
     db.add(log)
     db.commit()
 
-    redis_client = getattr(request.app.state, "redis", None)
-    await invalidate_domain_policy_cache(redis_client, agent.tenant_id)
+    redis_client = _get_redis_client(request)
+    await domain_policy_cache.invalidate_by_prefix(f"tenant:{agent.tenant_id}:", redis_client)
+    await agent_state_cache.invalidate(agent_id, redis_client)
 
     return {"agent_id": agent_id, "profile_id": profile.id, "profile_name": profile.name}
 
@@ -359,8 +370,9 @@ async def unassign_agent_profile(
     db.add(log)
     db.commit()
 
-    redis_client = getattr(request.app.state, "redis", None)
-    await invalidate_domain_policy_cache(redis_client, agent.tenant_id)
+    redis_client = _get_redis_client(request)
+    await domain_policy_cache.invalidate_by_prefix(f"tenant:{agent.tenant_id}:", redis_client)
+    await agent_state_cache.invalidate(agent_id, redis_client)
 
     return {"agent_id": agent_id, "profile_id": None}
 
@@ -432,9 +444,11 @@ async def bulk_assign_agent_profile(
     db.add(log)
     db.commit()
 
-    redis_client = getattr(request.app.state, "redis", None)
+    redis_client = _get_redis_client(request)
     tenant_ids = {a.tenant_id for a in agents}
     for tid in tenant_ids:
-        await invalidate_domain_policy_cache(redis_client, tid)
+        await domain_policy_cache.invalidate_by_prefix(f"tenant:{tid}:", redis_client)
+    for agent in agents:
+        await agent_state_cache.invalidate(agent.agent_id, redis_client)
 
     return {"updated": body.agent_ids, "profile_id": body.profile_id, "profile_name": profile_name}

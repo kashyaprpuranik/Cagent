@@ -8,7 +8,7 @@ from control_plane.database import get_db
 from control_plane.models import AgentState, ApiToken, AuditTrail
 from control_plane.schemas import ApiTokenCreate, ApiTokenResponse, ApiTokenCreatedResponse
 from control_plane.crypto import generate_token, hash_token
-from control_plane.auth import TokenInfo, require_admin_role, require_admin_role_with_ip_check, invalidate_token_cache, invalidate_token_cache_async
+from control_plane.auth import TokenInfo, require_admin_role, require_admin_role_with_ip_check, invalidate_token_cache_async, _get_redis_client
 from control_plane.rate_limit import limiter
 
 router = APIRouter()
@@ -103,19 +103,35 @@ async def create_token(
 
     # Determine tenant_id for the new token
     new_tenant_id = body.tenant_id
-    if body.token_type == "agent" and body.agent_id:
-        # For agent tokens, try to get tenant from the agent (if it exists)
-        # Allow pre-provisioning tokens for agents that don't exist yet
-        agent = db.query(AgentState).filter(
-            AgentState.agent_id == body.agent_id,
-            AgentState.deleted_at.is_(None)
-        ).first()
-        if agent:
-            new_tenant_id = agent.tenant_id
-
-    # Fall back to creator's tenant if still unresolved
     if not new_tenant_id:
         new_tenant_id = token_info.tenant_id
+
+    # For agent tokens, ensure the agent state exists (provisioning step).
+    # Creates the agent if it doesn't exist; reuses tenant from existing agent.
+    if body.token_type == "agent" and body.agent_id:
+        agent = db.query(AgentState).filter(
+            AgentState.agent_id == body.agent_id,
+        ).first()
+        if agent and agent.deleted_at:
+            # Restore soft-deleted agent
+            agent.deleted_at = None
+            agent.approved = True
+            agent.approved_at = datetime.now(timezone.utc)
+            agent.approved_by = token_info.token_name or "admin"
+            new_tenant_id = agent.tenant_id
+        elif agent:
+            new_tenant_id = agent.tenant_id
+        else:
+            # Create agent state — this is the provisioning step
+            agent = AgentState(
+                agent_id=body.agent_id,
+                tenant_id=new_tenant_id,
+                approved=True,
+                approved_at=datetime.now(timezone.utc),
+                approved_by=token_info.token_name or "admin",
+            )
+            db.add(agent)
+            db.flush()
 
     # Check for duplicate name within the same tenant
     name_query = db.query(ApiToken).filter(ApiToken.name == body.name)
@@ -217,7 +233,7 @@ async def delete_token(
 
     token_name = db_token.name
     deleted_token_tenant_id = db_token.tenant_id
-    redis_client = getattr(request.app.state, "redis", None)
+    redis_client = _get_redis_client(request)
     await invalidate_token_cache_async(db_token.token_hash, redis_client)
 
     # Log token deletion — target is the tenant the token belonged to
@@ -255,7 +271,7 @@ async def update_token(
 
     if enabled is not None:
         db_token.enabled = enabled
-        redis_client = getattr(request.app.state, "redis", None)
+        redis_client = _get_redis_client(request)
         await invalidate_token_cache_async(db_token.token_hash, redis_client)
 
         # Log the change — target is the tenant the token belongs to

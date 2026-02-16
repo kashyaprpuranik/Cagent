@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from control_plane.database import get_db
 from control_plane.models import Tenant, AgentState, ApiToken, AuditTrail
 from control_plane.schemas import TenantCreate, TenantResponse
-from control_plane.auth import TokenInfo, require_super_admin
+from control_plane.auth import TokenInfo, require_super_admin, _get_redis_client
+from control_plane.cache import agent_state_cache
 from control_plane.rate_limit import limiter
 from control_plane.config import OPENOBSERVE_MULTI_TENANT, logger
 from control_plane.openobserve import provision_tenant_org, delete_tenant_org, store_org_credentials
@@ -222,5 +223,10 @@ async def delete_tenant(
     )
     db.add(log)
     db.commit()
+
+    # Invalidate cached agent state for all soft-deleted agents
+    redis_client = _get_redis_client(request)
+    for agent in agents:
+        await agent_state_cache.invalidate(agent.agent_id, redis_client)
 
     return {"status": "deleted", "tenant_id": tenant_id, "agents_deleted": agent_count}

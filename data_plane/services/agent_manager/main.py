@@ -176,6 +176,12 @@ def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
         (success: bool, message: str)
     """
     name = container.name
+    if profile_name == "permissive":
+        logger.warning(
+            f"Applying PERMISSIVE seccomp profile to {name}. "
+            "This effectively disables syscall sandboxing and allows container-escape "
+            "primitives (ptrace, mount, unshare, setns). Use only for temporary debugging."
+        )
     logger.info(f"Recreating container {name} with seccomp profile: {profile_name}")
 
     try:

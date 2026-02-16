@@ -4,8 +4,18 @@
 class TestTerminalTicketAndSessions:
     """Test terminal ticket creation and session listing."""
 
+    def _provision_agent(self, client, auth_headers, agent_id):
+        """Helper: provision an agent via token creation."""
+        client.post(
+            "/api/v1/tokens",
+            headers=auth_headers,
+            json={"name": f"{agent_id}-token", "token_type": "agent", "agent_id": agent_id},
+        )
+
     def _create_online_agent_with_stcp(self, client, auth_headers, agent_id):
         """Helper: create an agent that is online and has STCP configured."""
+        self._provision_agent(client, auth_headers, agent_id)
+        # Heartbeat to set status to "running" (required for "online" check)
         client.post(
             f"/api/v1/agent/heartbeat?agent_id={agent_id}",
             headers=auth_headers,
@@ -37,11 +47,7 @@ class TestTerminalTicketAndSessions:
 
     def test_create_terminal_ticket_no_stcp(self, client, auth_headers, super_admin_headers):
         """Should fail when STCP is not configured."""
-        client.post(
-            "/api/v1/agent/heartbeat?agent_id=no-stcp-ticket-agent",
-            headers=auth_headers,
-            json={"status": "running"}
-        )
+        self._provision_agent(client, auth_headers, "no-stcp-ticket-agent")
 
         response = client.post(
             "/api/v1/terminal/no-stcp-ticket-agent/ticket",

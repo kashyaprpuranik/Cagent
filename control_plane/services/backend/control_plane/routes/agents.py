@@ -6,7 +6,6 @@ from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy import update
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
@@ -19,8 +18,9 @@ from control_plane.schemas import (
 from control_plane.crypto import encrypt_secret, decrypt_secret
 from control_plane.auth import (
     TokenInfo, verify_token, require_admin_role, require_developer_role,
-    require_admin_role_with_ip_check,
+    require_admin_role_with_ip_check, _get_redis_client,
 )
+from control_plane.cache import security_profile_cache, agent_state_cache
 from control_plane.utils import verify_agent_access, get_audit_tenant_id
 from control_plane.rate_limit import limiter
 from control_plane.redis_client import write_heartbeat, is_agent_online as redis_is_agent_online
@@ -42,41 +42,60 @@ async def _check_agent_online(redis_client, agent: AgentState) -> bool:
     return False
 
 
-def get_or_create_agent_state(db: Session, agent_id: str = "default", tenant_id: Optional[int] = None) -> AgentState:
-    """Get or create agent state record.
+def get_agent_state(db: Session, agent_id: str) -> AgentState:
+    """Look up an existing agent state record.
 
-    If an agent was soft-deleted and tries to reconnect, it is restored
-    as active (token creation is authorization).
+    Agent state must be provisioned before use (created when an agent token
+    is issued, a tenant is created, or via the seed script). Heartbeats and
+    log ingestion are not allowed to auto-create agents.
 
-    tenant_id is required when creating a new agent. Existing agents already
-    have tenant_id in the database.
-
-    Uses try/except IntegrityError to handle concurrent creation attempts
-    (e.g. two heartbeats from a new agent arriving simultaneously).
+    Raises:
+        HTTPException 404 if the agent does not exist or was soft-deleted.
     """
-    state = db.query(AgentState).filter(AgentState.agent_id == agent_id).first()
+    state = db.query(AgentState).filter(
+        AgentState.agent_id == agent_id,
+        AgentState.deleted_at.is_(None)
+    ).first()
     if not state:
-        if tenant_id is None:
-            raise ValueError(f"tenant_id is required when creating new agent: {agent_id}")
-        state = AgentState(agent_id=agent_id, tenant_id=tenant_id, approved=True)
-        db.add(state)
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            state = db.query(AgentState).filter(AgentState.agent_id == agent_id).first()
-            if not state:
-                raise
-        db.refresh(state)
-    elif state.deleted_at:
-        # Restore soft-deleted agent as active
-        state.deleted_at = None
-        state.approved = True
-        state.approved_at = datetime.now(timezone.utc)
-        state.approved_by = "auto"
-        db.commit()
-        db.refresh(state)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_id}' not found. Create an agent token first to provision the agent."
+        )
     return state
+
+
+def _load_agent_meta(db: Session, agent_id: str) -> dict:
+    """Load agent metadata for caching. Raises HTTPException(404) if not found."""
+    state = db.query(AgentState).filter(
+        AgentState.agent_id == agent_id,
+        AgentState.deleted_at.is_(None)
+    ).first()
+    if not state:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_id}' not found. Create an agent token first to provision the agent."
+        )
+    return {
+        "tenant_id": state.tenant_id,
+        "security_profile_id": state.security_profile_id,
+        "seccomp_profile": state.seccomp_profile or "hardened",
+        "pending_command": state.pending_command,
+        "pending_command_args": state.pending_command_args,
+    }
+
+
+def _load_security_profile(db: Session, profile_id: int) -> Optional[dict]:
+    """Load security profile for caching. Returns None if not found."""
+    profile = db.query(SecurityProfile).filter(SecurityProfile.id == profile_id).first()
+    if not profile:
+        return None
+    return {
+        "name": profile.name,
+        "seccomp_profile": profile.seccomp_profile or "hardened",
+        "cpu_limit": profile.cpu_limit,
+        "memory_limit_mb": profile.memory_limit_mb,
+        "pids_limit": profile.pids_limit,
+    }
 
 
 @router.get("/api/v1/agents")
@@ -114,7 +133,7 @@ async def list_agents(
 
     total = query.count()
     agents = query.offset(offset).limit(limit).all()
-    redis_client = getattr(request.app.state, "redis", None)
+    redis_client = _get_redis_client(request)
 
     # Batch-resolve security profile names
     profile_ids = {a.security_profile_id for a in agents if a.security_profile_id}
@@ -165,13 +184,38 @@ async def agent_heartbeat(
         if not agent_id:
             raise HTTPException(status_code=400, detail="agent_id query parameter required for admin tokens")
 
-    # Get or create agent with tenant from token
-    state = get_or_create_agent_state(db, agent_id, token_info.tenant_id)
+    redis_client = _get_redis_client(request)
 
-    redis_client = getattr(request.app.state, "redis", None)
+    # Cached agent metadata — avoids DB SELECT on the common path.
+    # If the agent doesn't exist, the loader raises HTTPException(404)
+    # which propagates without caching.
+    agent_meta = await agent_state_cache.get(
+        agent_id, redis_client,
+        loader=lambda: _load_agent_meta(db, agent_id)
+    )
+
+    # Determine if we need the full ORM object (for DB writes)
+    needs_db = (
+        heartbeat.last_command is not None
+        or agent_meta.get("pending_command") is not None
+        or redis_client is None  # DB fallback for status fields
+    )
+
+    state = None
+    if needs_db:
+        state = db.query(AgentState).filter(
+            AgentState.agent_id == agent_id,
+            AgentState.deleted_at.is_(None)
+        ).first()
+        if not state:
+            await agent_state_cache.invalidate(agent_id, redis_client)
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent '{agent_id}' not found."
+            )
 
     # Update last command result if reported (infrequent, always DB)
-    if heartbeat.last_command:
+    if heartbeat.last_command and state:
         state.last_command = heartbeat.last_command
         state.last_command_result = heartbeat.last_command_result
         state.last_command_message = heartbeat.last_command_message
@@ -184,14 +228,14 @@ async def agent_heartbeat(
             action=f"Agent {heartbeat.last_command}: {heartbeat.last_command_result}",
             details=heartbeat.last_command_message,
             severity="INFO" if heartbeat.last_command_result == "success" else "WARNING",
-            tenant_id=state.tenant_id
+            tenant_id=agent_meta["tenant_id"]
         )
         db.add(log)
 
     # Get pending command and clear it
     response = AgentHeartbeatResponse(ack=True)
 
-    if state.pending_command:
+    if state and state.pending_command:
         response.command = state.pending_command
         if state.pending_command_args:
             response.command_args = json.loads(state.pending_command_args)
@@ -201,22 +245,27 @@ async def agent_heartbeat(
         state.pending_command_args = None
         state.pending_command_at = None
 
-    # Include seccomp profile and resource limits in response for agent-manager to enforce
-    # Profile takes precedence over per-agent setting
-    if state.security_profile_id:
-        profile = db.query(SecurityProfile).filter(SecurityProfile.id == state.security_profile_id).first()
-        if profile:
-            response.seccomp_profile = profile.seccomp_profile or "hardened"
-            response.cpu_limit = profile.cpu_limit
-            response.memory_limit_mb = profile.memory_limit_mb
-            response.pids_limit = profile.pids_limit
+    # Include seccomp profile and resource limits in response for agent-manager
+    # to enforce.  Profile takes precedence over per-agent setting.
+    # Uses security_profile_cache to avoid a second DB SELECT.
+    profile_id = state.security_profile_id if state else agent_meta.get("security_profile_id")
+    if profile_id:
+        profile_data = await security_profile_cache.get(
+            str(profile_id), redis_client,
+            loader=lambda: _load_security_profile(db, profile_id)
+        )
+        if profile_data:
+            response.seccomp_profile = profile_data.get("seccomp_profile", "hardened")
+            response.cpu_limit = profile_data.get("cpu_limit")
+            response.memory_limit_mb = profile_data.get("memory_limit_mb")
+            response.pids_limit = profile_data.get("pids_limit")
         else:
-            response.seccomp_profile = state.seccomp_profile or "hardened"
+            response.seccomp_profile = agent_meta.get("seccomp_profile", "hardened")
     else:
-        response.seccomp_profile = state.seccomp_profile or "hardened"
+        response.seccomp_profile = agent_meta.get("seccomp_profile", "hardened")
 
     # DB fallback: write status fields when Redis is unavailable
-    if redis_client is None:
+    if redis_client is None and state:
         state.status = heartbeat.status
         state.container_id = heartbeat.container_id
         state.uptime_seconds = heartbeat.uptime_seconds
@@ -225,7 +274,11 @@ async def agent_heartbeat(
         state.memory_limit_mb = int(heartbeat.memory_limit_mb) if heartbeat.memory_limit_mb else None
         state.last_heartbeat = datetime.now(timezone.utc)
 
-    db.commit()
+    # Commit only if we touched the ORM
+    if state is not None:
+        db.commit()
+        # Invalidate cache since agent state was modified
+        await agent_state_cache.invalidate(agent_id, redis_client)
 
     # Write heartbeat to Redis (primary path — background flush syncs to DB)
     await write_heartbeat(
@@ -241,7 +294,8 @@ async def agent_heartbeat(
     return response
 
 
-def _queue_command(
+async def _queue_command(
+    request: Request,
     agent_id: str,
     command: str,
     db: Session,
@@ -297,6 +351,10 @@ def _queue_command(
 
     db.commit()
 
+    # Invalidate agent cache so the next heartbeat sees the pending command
+    redis_client = _get_redis_client(request)
+    await agent_state_cache.invalidate(agent_id, redis_client)
+
     return {
         "status": "queued",
         "command": command,
@@ -317,8 +375,8 @@ async def queue_agent_wipe(
 
     The command will be delivered to agent-manager on next heartbeat.
     """
-    return _queue_command(
-        agent_id, "wipe", db, token_info,
+    return await _queue_command(
+        request, agent_id, "wipe", db, token_info,
         args={"wipe_workspace": body.wipe_workspace},
         audit_event="agent_wipe_requested",
         audit_action=f"Wipe requested for {agent_id} (workspace={'wipe' if body.wipe_workspace else 'preserve'})",
@@ -335,7 +393,7 @@ async def queue_agent_restart(
     token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a restart command for the specified agent (admin only)."""
-    return _queue_command(agent_id, "restart", db, token_info)
+    return await _queue_command(request, agent_id, "restart", db, token_info)
 
 
 @router.post("/api/v1/agents/{agent_id}/stop")
@@ -347,7 +405,7 @@ async def queue_agent_stop(
     token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a stop command for the specified agent (admin only)."""
-    return _queue_command(agent_id, "stop", db, token_info)
+    return await _queue_command(request, agent_id, "stop", db, token_info)
 
 
 @router.post("/api/v1/agents/{agent_id}/start")
@@ -359,7 +417,7 @@ async def queue_agent_start(
     token_info: TokenInfo = Depends(require_admin_role_with_ip_check)
 ):
     """Queue a start command for the specified agent (admin only)."""
-    return _queue_command(agent_id, "start", db, token_info)
+    return await _queue_command(request, agent_id, "start", db, token_info)
 
 
 @router.get("/api/v1/agents/{agent_id}/status", response_model=AgentStatusResponse)
@@ -380,15 +438,18 @@ async def get_agent_status(
     if not state:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
-    redis_client = getattr(request.app.state, "redis", None)
+    redis_client = _get_redis_client(request)
     online = await _check_agent_online(redis_client, state)
 
-    # Resolve profile name if assigned
+    # Resolve profile name if assigned (cached)
     profile_name = None
     if state.security_profile_id:
-        profile = db.query(SecurityProfile).filter(SecurityProfile.id == state.security_profile_id).first()
-        if profile:
-            profile_name = profile.name
+        profile_data = await security_profile_cache.get(
+            str(state.security_profile_id), redis_client,
+            loader=lambda: _load_security_profile(db, state.security_profile_id)
+        )
+        if profile_data:
+            profile_name = profile_data.get("name")
 
     return AgentStatusResponse(
         agent_id=state.agent_id,
@@ -469,6 +530,10 @@ async def update_security_settings(
     )
     db.add(log)
     db.commit()
+
+    # Invalidate cached agent metadata (seccomp_profile changed)
+    redis_client = _get_redis_client(request)
+    await agent_state_cache.invalidate(agent_id, redis_client)
 
     return SecuritySettingsResponse(
         agent_id=state.agent_id,

@@ -10,9 +10,10 @@ from fastapi import FastAPI
 from control_plane.config import logger, REDIS_URL, OPENOBSERVE_MULTI_TENANT
 from control_plane.database import SessionLocal
 from control_plane.seed import seed_bootstrap, seed_test_data
+from control_plane.cache import domain_policy_cache
 from control_plane.redis_client import (
     create_redis_client, close_redis_client,
-    scan_all_heartbeats, invalidate_domain_policy_cache,
+    scan_all_heartbeats,
 )
 
 _HEARTBEAT_FLUSH_INTERVAL = 60  # seconds
@@ -97,7 +98,7 @@ async def _policy_subscriber_loop(app: FastAPI):
                     data = json.loads(msg["data"])
                     tenant_id = data.get("tenant_id")
                     if tenant_id is not None:
-                        await invalidate_domain_policy_cache(redis_client, tenant_id)
+                        await domain_policy_cache.invalidate_by_prefix(f"tenant:{tenant_id}:", redis_client)
                 except Exception as exc:
                     logger.warning("Policy subscriber parse error: %s", exc)
             await asyncio.sleep(0.1)

@@ -29,12 +29,7 @@ class TestLogEndpoints:
     """Test log ingestion and query endpoints."""
 
     def _create_agent_token(self, client, auth_headers, agent_id):
-        """Helper: create agent via heartbeat and return an agent token."""
-        client.post(
-            f"/api/v1/agent/heartbeat?agent_id={agent_id}",
-            headers=auth_headers,
-            json={"status": "running"}
-        )
+        """Helper: create agent token (which auto-provisions the agent)."""
         token_response = client.post(
             "/api/v1/tokens",
             headers=auth_headers,
@@ -82,12 +77,7 @@ class TestLogIngestionHardening:
     """Test ingestion hardening (independent of multi-tenancy toggle)."""
 
     def _create_agent_token(self, client, auth_headers, agent_id):
-        """Helper: create agent via heartbeat and return an agent token."""
-        client.post(
-            f"/api/v1/agent/heartbeat?agent_id={agent_id}",
-            headers=auth_headers,
-            json={"status": "running"}
-        )
+        """Helper: create agent token (which auto-provisions the agent)."""
         token_response = client.post(
             "/api/v1/tokens",
             headers=auth_headers,
@@ -167,12 +157,7 @@ class TestMultiTenantIngestion:
     """Test multi-tenant log ingestion routing (OPENOBSERVE_MULTI_TENANT=true)."""
 
     def _create_agent_token(self, client, auth_headers, agent_id):
-        """Helper: create agent via heartbeat and return an agent token."""
-        client.post(
-            f"/api/v1/agent/heartbeat?agent_id={agent_id}",
-            headers=auth_headers,
-            json={"status": "running"}
-        )
+        """Helper: create agent token (which auto-provisions the agent)."""
         token_response = client.post(
             "/api/v1/tokens",
             headers=auth_headers,

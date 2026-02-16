@@ -16,14 +16,10 @@ from control_plane.schemas import (
     DomainPolicyCreate, DomainPolicyUpdate, DomainPolicyResponse, DomainPolicyCredential,
 )
 from control_plane.crypto import encrypt_secret, decrypt_secret
-from control_plane.auth import TokenInfo, verify_token, require_admin_role, require_admin_role_with_ip_check
+from control_plane.auth import TokenInfo, verify_token, require_admin_role, require_admin_role_with_ip_check, _get_redis_client
+from control_plane.cache import domain_policy_cache
 from control_plane.rate_limit import limiter
-from control_plane.redis_client import (
-    publish_policy_changed,
-    get_cached_domain_policies,
-    cache_domain_policies,
-    invalidate_domain_policy_cache,
-)
+from control_plane.redis_client import publish_policy_changed
 
 router = APIRouter()
 
@@ -209,9 +205,9 @@ async def create_domain_policy(
     db.commit()
     db.refresh(db_policy)
 
-    redis_client = getattr(request.app.state, "redis", None)
+    redis_client = _get_redis_client(request)
     await publish_policy_changed(redis_client, effective_tenant_id, "created", policy.domain)
-    await invalidate_domain_policy_cache(redis_client, effective_tenant_id)
+    await domain_policy_cache.invalidate_by_prefix(f"tenant:{effective_tenant_id}:", redis_client)
 
     return domain_policy_to_response(db_policy)
 
@@ -306,61 +302,50 @@ async def export_domain_policies(
     """Export all domains for CoreDNS allowlist.
 
     Returns list of domains (without credentials) for DNS filtering.
-    Uses Redis cache (300 s TTL) when available.
+    Uses LayeredCache (memory 60 s / Redis 300 s) when available.
     """
-    # Build cache key from token context
-    redis_client = getattr(request.app.state, "redis", None)
+    redis_client = _get_redis_client(request)
     agent_part = token_info.agent_id or "all"
     tenant_part = token_info.tenant_id or "global"
     cache_key = f"tenant:{tenant_part}:agent:{agent_part}:export"
 
-    # Check Redis cache first
-    cached = await get_cached_domain_policies(redis_client, cache_key)
-    if cached is not None:
-        return cached
+    def _load():
+        query = db.query(DomainPolicy).filter(DomainPolicy.enabled == True)
 
-    query = db.query(DomainPolicy).filter(DomainPolicy.enabled == True)
+        # Resolve profile for agent token
+        if token_info.token_type == "agent" and token_info.agent_id:
+            agent = db.query(AgentState).filter(AgentState.agent_id == token_info.agent_id).first()
+            profile = None
+            if agent and agent.security_profile_id:
+                profile = db.query(SecurityProfile).filter(SecurityProfile.id == agent.security_profile_id).first()
 
-    # Resolve profile for agent token
-    if token_info.token_type == "agent" and token_info.agent_id:
-        agent = db.query(AgentState).filter(AgentState.agent_id == token_info.agent_id).first()
-        profile = None
-        if agent and agent.security_profile_id:
-            profile = db.query(SecurityProfile).filter(SecurityProfile.id == agent.security_profile_id).first()
+            if not profile and agent:
+                # Fall back to "default" profile for the tenant
+                profile = db.query(SecurityProfile).filter(
+                    SecurityProfile.name == "default",
+                    SecurityProfile.tenant_id == agent.tenant_id,
+                ).first()
 
-        if not profile and agent:
-            # Fall back to "default" profile for the tenant
-            profile = db.query(SecurityProfile).filter(
-                SecurityProfile.name == "default",
-                SecurityProfile.tenant_id == agent.tenant_id,
-            ).first()
+            if profile:
+                query = query.filter(DomainPolicy.profile_id == profile.id)
+            else:
+                query = query.filter(DomainPolicy.profile_id == -1)
+        elif not token_info.is_super_admin:
+            if not token_info.tenant_id:
+                raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
+            query = query.filter(DomainPolicy.tenant_id == token_info.tenant_id)
 
-        if profile:
-            query = query.filter(DomainPolicy.profile_id == profile.id)
-        else:
-            # No profile at all — return nothing
-            query = query.filter(DomainPolicy.profile_id == -1)
-    elif not token_info.is_super_admin:
-        # Non-super-admin sees only their tenant's policies
-        if not token_info.tenant_id:
-            raise HTTPException(status_code=403, detail="Token must be scoped to a tenant")
-        query = query.filter(DomainPolicy.tenant_id == token_info.tenant_id)
+        # Filter out expired policies
+        query = _filter_not_expired(query)
 
-    # Filter out expired policies
-    query = _filter_not_expired(query)
+        policies = query.all()
+        domains = [p.domain for p in policies]
+        return {
+            "domains": domains,
+            "generated_at": datetime.now(timezone.utc).isoformat()
+        }
 
-    policies = query.all()
-    domains = [p.domain for p in policies]
-
-    result = {
-        "domains": domains,
-        "generated_at": datetime.now(timezone.utc).isoformat()
-    }
-
-    # Populate Redis cache
-    await cache_domain_policies(redis_client, cache_key, result)
-
-    return result
+    return await domain_policy_cache.get(cache_key, redis_client, loader=_load)
 
 
 @router.get("/api/v1/domain-policies/{policy_id}", response_model=DomainPolicyResponse)
@@ -445,9 +430,9 @@ async def update_domain_policy(
     db.commit()
     db.refresh(policy)
 
-    redis_client = getattr(request.app.state, "redis", None)
+    redis_client = _get_redis_client(request)
     await publish_policy_changed(redis_client, policy.tenant_id, "updated", policy.domain)
-    await invalidate_domain_policy_cache(redis_client, policy.tenant_id)
+    await domain_policy_cache.invalidate_by_prefix(f"tenant:{policy.tenant_id}:", redis_client)
 
     return domain_policy_to_response(policy)
 
@@ -485,9 +470,9 @@ async def delete_domain_policy(
     db.add(log)
     db.commit()
 
-    redis_client = getattr(request.app.state, "redis", None)
+    redis_client = _get_redis_client(request)
     await publish_policy_changed(redis_client, tenant_id, "deleted", domain)
-    await invalidate_domain_policy_cache(redis_client, tenant_id)
+    await domain_policy_cache.invalidate_by_prefix(f"tenant:{tenant_id}:", redis_client)
 
     return {"deleted": True, "id": policy_id}
 
@@ -525,7 +510,7 @@ async def rotate_domain_policy_credential(
     db.commit()
     db.refresh(policy)
 
-    redis_client = getattr(request.app.state, "redis", None)
+    redis_client = _get_redis_client(request)
     await publish_policy_changed(redis_client, policy.tenant_id, "updated", policy.domain)
 
     return domain_policy_to_response(policy)

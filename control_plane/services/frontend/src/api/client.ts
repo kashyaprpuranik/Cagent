@@ -44,7 +44,7 @@ class ApiError extends Error {
 }
 
 function getAuthHeaders(): HeadersInit {
-  const token = localStorage.getItem('api_token');
+  const token = sessionStorage.getItem('api_token');
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
   };
@@ -58,7 +58,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
   // Only logout on 401 (Unauthorized), not 403 (Forbidden)
   // 401 = not authenticated, 403 = authenticated but lacking permission
   if (response.status === 401) {
-    localStorage.removeItem('api_token');
+    sessionStorage.removeItem('api_token');
     window.location.href = '/login';
     throw new ApiError(response.status, 'Unauthorized');
   }
@@ -78,15 +78,15 @@ async function handleResponse<T>(response: Response): Promise<T> {
 export const api = {
   // Auth
   setToken: (token: string) => {
-    localStorage.setItem('api_token', token);
+    sessionStorage.setItem('api_token', token);
   },
 
   getToken: () => {
-    return localStorage.getItem('api_token');
+    return sessionStorage.getItem('api_token');
   },
 
   clearToken: () => {
-    localStorage.removeItem('api_token');
+    sessionStorage.removeItem('api_token');
   },
 
   // Current user info

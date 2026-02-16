@@ -38,15 +38,7 @@ Tokens are hashed with plain SHA-256 and no salt. If the token hash database is 
 
 **Recommendation:** Use a purpose-built key derivation function (bcrypt, scrypt, or Argon2id) with per-token salt.
 
-#### 2.3 Auth tokens stored in localStorage
-
-The frontend stores bearer tokens in `localStorage`, which is accessible to any JavaScript running on the same origin. A single XSS vulnerability would allow an attacker to exfiltrate the token silently.
-
-- `control_plane/services/frontend/src/api/client.ts:75-85`
-
-**Recommendation:** Use `httpOnly` secure cookies for token transport, or at minimum move to `sessionStorage`.
-
-#### 2.4 Credentials passed via container environment variables
+#### 2.3 Credentials passed via container environment variables
 
 Credentials such as `STATIC_CREDENTIALS`, database passwords, and API tokens are injected as environment variables in Docker Compose. These are visible in `docker inspect`, `/proc/<pid>/environ`, and core dumps. Any container escape or debug access exposes them.
 
@@ -56,7 +48,7 @@ Credentials such as `STATIC_CREDENTIALS`, database passwords, and API tokens are
 
 **Recommendation:** Use Docker secrets or a secrets manager (Vault, SOPS) instead of environment variables for production deployments.
 
-#### 2.5 Docker socket mounted in data plane containers
+#### 2.4 Docker socket mounted in data plane containers
 
 Three services mount `/var/run/docker.sock` (read-only): log-shipper, agent-manager, and local-admin. Even read-only access allows full container enumeration and inspection, and is a well-documented privilege escalation vector. A compromised service on `infra-net` could inspect all containers, read their environment variables (including secrets), and potentially escape to the host.
 
@@ -68,7 +60,7 @@ Three services mount `/var/run/docker.sock` (read-only): log-shipper, agent-mana
 
 ### Medium
 
-#### 2.6 Tunnel client bridges agent-net and infra-net
+#### 2.5 Tunnel client bridges agent-net and infra-net
 
 When the `ssh` profile is active, the FRP tunnel client is attached to both `agent-net` (10.200.1.30) and `infra-net` (10.200.2.30). A compromised tunnel client could route traffic between the isolated agent network and the infrastructure network, breaking the core isolation boundary.
 
@@ -76,7 +68,7 @@ When the `ssh` profile is active, the FRP tunnel client is attached to both `age
 
 **Recommendation:** Remove the tunnel client from `agent-net` and proxy SSH access through a dedicated service on `infra-net` only.
 
-#### 2.7 In-memory Lua rate limiting resets on Envoy restart
+#### 2.6 In-memory Lua rate limiting resets on Envoy restart
 
 The Lua filter's token-bucket rate limiter stores all state in the Lua VM's memory. An Envoy restart (crash, config reload, deployment) resets all rate limit windows, allowing a burst of previously-limited requests. Note: this is a data-plane-specific concern — the control plane's rate limiter (`slowapi`) already supports Redis-backed storage.
 
@@ -85,7 +77,7 @@ The Lua filter's token-bucket rate limiter stores all state in the Lua VM's memo
 
 **Recommendation:** Back rate limit state with Redis or Envoy's built-in `envoy.filters.http.ratelimit` service with an external rate limit server.
 
-#### 2.8 No credential or key rotation mechanism
+#### 2.7 No credential or key rotation mechanism
 
 There is no tooling or process for rotating the Fernet `ENCRYPTION_KEY`, API tokens, database credentials, or FRP tunnel secrets. A compromised key requires manual intervention across all services.
 
@@ -95,7 +87,7 @@ There is no tooling or process for rotating the Fernet `ENCRYPTION_KEY`, API tok
 
 ### Low
 
-#### 2.9 WebSocket ticket passed as query parameter
+#### 2.8 WebSocket ticket passed as query parameter
 
 Terminal access tickets are sent as a `?ticket=` query parameter during the WebSocket handshake. Query parameters may appear in access logs, load balancer logs, and HTTP `Referer` headers. The ticket is single-use and expires in 60 seconds, which limits the exposure window.
 
@@ -103,7 +95,7 @@ Terminal access tickets are sent as a `?ticket=` query parameter during the WebS
 
 **Recommendation:** Document the log-scrubbing requirement for any reverse proxy in front of the backend. Consider a two-step upgrade where the ticket is sent in the first WebSocket message instead.
 
-#### 2.10 DNS tunneling detection is heuristic-only
+#### 2.9 DNS tunneling detection is heuristic-only
 
 The Lua filter detects DNS tunneling via label length, hostname length, subdomain depth, and hex-pattern heuristics. These can be evaded with short labels, mixed encoding, or slow exfiltration over many queries.
 
@@ -144,12 +136,6 @@ Background task runs every 60s: scans ALL Redis heartbeat keys (O(N) SCAN), then
 The `AuditTrail` table has a TEXT `details` column with no retention policy. Search queries use `.contains()` which requires full table scans on text fields.
 
 **Recommendation**: Implement TTL-based cleanup (e.g., 90-day retention). Add GIN index on searchable fields for PostgreSQL.
-
-#### 3.1.5 No Resource Limits on CP Services (HIGH)
-
-Only OpenObserve has explicit resource limits in `control_plane/docker-compose.yml`. PostgreSQL and backend can consume all host resources under load.
-
-**Recommendation**: Add `deploy.resources.limits` to all services.
 
 ### 3.2 Data Plane Bottlenecks
 
@@ -240,19 +226,15 @@ The entire system relies on polling for state synchronization:
 
 **Recommendation**: Move to event-driven architecture (webhooks, SSE, or message queue) for config changes. Keep polling only as fallback.
 
-#### No Horizontal Scaling Path
+#### How to Scale
 
-| Component | Current | Blocker |
-|-----------|---------|---------|
-| CP Backend | Single instance | No session affinity or shared cache |
-| Envoy Proxy | Single instance | Static IP, no LB |
-| CoreDNS | Single instance | Static IP, no replication |
-| Agent Manager | Single instance | Docker socket coupling |
-| Log Shipper | Single instance | No clustering |
-
-#### Missing Health Checks
-
-Services without health checks: dns-filter (CoreDNS), agent containers, local-admin, agent-manager, tunnel-client, log-store (OpenObserve), frontend, tunnel-server.
+| Component | Current | To Scale |
+|-----------|---------|----------|
+| CP Backend | Single instance | Run multiple instances behind a load balancer; LayeredCache already shares state via Redis |
+| Envoy Proxy | Single instance, static IP | Remove static IP, deploy replicated instances behind an L4 load balancer |
+| CoreDNS | Single instance, static IP | Remove static IP, deploy redundant instances behind DNS round-robin or L4 LB |
+| Agent Manager | Single instance | Decouple from Docker socket; use Docker API over TCP with TLS |
+| Log Shipper | Single instance | Deploy one per data plane host; Vector supports clustering |
 
 ### 3.4 Priority Remediation Matrix
 
@@ -263,16 +245,12 @@ Services without health checks: dns-filter (CoreDNS), agent containers, local-ad
 | Single Envoy proxy (SPOF) | High |
 | Single CoreDNS instance (SPOF) | High |
 | Unbounded Lua filter memory | Medium |
-| Token cache not shared across workers | Medium |
-| No CP service resource limits | Low |
 | Heartbeat worker limit (20) | Low |
 
 #### P1 — Performance Degradation at Scale
 
 | Issue | Effort | Status |
 |-------|--------|--------|
-| IP ACL loaded on every request | Medium | **Resolved** (LayeredCache) |
-| Domain policy full table load | Medium | Open |
 | Blocking Docker stats() calls | Medium | Open |
 | Full config regeneration | High | Open |
 | Container recreation for seccomp | High | Open |
@@ -284,12 +262,10 @@ Services without health checks: dns-filter (CoreDNS), agent containers, local-ad
 |-------|--------|--------|
 | In-memory rate limiter fallback | Low | Open |
 | Vector log rate limiting | Low | Open |
-| Synchronous token last-used writes | Medium | Open |
 | OpenObserve no retry/circuit breaker | Medium | Open |
 | Heartbeat flush inefficiency | Medium | Open |
 | Audit trail unbounded growth | Medium | Open |
 | Network subnet limits (/24) | Medium | Open |
-| Missing health checks (8 services) | Medium | Open |
 | Lua wildcard O(n) matching | Medium | Open |
 
 ### 3.5 Scaling Thresholds
@@ -299,7 +275,7 @@ Services without health checks: dns-filter (CoreDNS), agent containers, local-ad
 | Concurrent agents per DP | ~250 | /24 subnet exhaustion |
 | Agents in connected mode | ~100 | Heartbeat worker limit (20 threads) |
 | Requests/sec to CP | ~500 (configurable) | DB connection pool (tunable via `DB_POOL_SIZE`) |
-| Domain policies per tenant | ~1000 | Full table load into memory |
+| Domain policies per tenant | ~1000 | Full table load on cache miss (cached via LayeredCache) |
 | Concurrent Envoy connections | ~1000 | Global circuit breaker threshold |
 | Log events/sec shipped | ~1600 | Vector rate limit (500 req/min × 200 batch) |
 | Unique tokens in 60s window | ~10,000 | In-memory cache memory pressure |

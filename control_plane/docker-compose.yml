@@ -55,6 +55,15 @@ services:
     networks:
       - control-net
 
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
     depends_on:
       db:
         condition: service_healthy
@@ -147,6 +156,21 @@ services:
     networks:
       - control-net
 
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
     depends_on:
       - backend
 
@@ -170,6 +194,21 @@ services:
       - "7000:7000"       # FRP control port (agents connect here via STCP)
       - "7500:7500"       # FRP dashboard
       # STCP mode: No SSH tunnel ports needed - P2P tunneling through control port
+
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7500/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
     networks:
       - control-net

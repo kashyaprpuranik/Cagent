@@ -151,7 +151,7 @@ services:
     # Strict security options
     security_opt:
       - no-new-privileges:true
-      - seccomp:unconfined  # gVisor provides its own syscall filtering
+      - seccomp:./configs/seccomp/agent-profile.json  # defense-in-depth: host seccomp + gVisor
 
     # Stricter resource limits for secure mode
     deploy:

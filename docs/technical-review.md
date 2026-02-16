@@ -76,15 +76,7 @@ When the `ssh` profile is active, the FRP tunnel client is attached to both `age
 
 **Recommendation:** Remove the tunnel client from `agent-net` and proxy SSH access through a dedicated service on `infra-net` only.
 
-#### 2.7 gVisor standard profile disables host seccomp
-
-When running under gVisor (`standard` profile), the agent container sets `seccomp:unconfined`, relying entirely on gVisor's user-space syscall interception. If a gVisor sandbox escape occurs, no host seccomp profile exists as a fallback layer.
-
-- `data_plane/docker-compose.yml:154`
-
-**Recommendation:** Apply a host-level seccomp profile alongside gVisor to provide defense-in-depth.
-
-#### 2.8 In-memory Lua rate limiting resets on Envoy restart
+#### 2.7 In-memory Lua rate limiting resets on Envoy restart
 
 The Lua filter's token-bucket rate limiter stores all state in the Lua VM's memory. An Envoy restart (crash, config reload, deployment) resets all rate limit windows, allowing a burst of previously-limited requests. Note: this is a data-plane-specific concern — the control plane's rate limiter (`slowapi`) already supports Redis-backed storage.
 
@@ -93,7 +85,7 @@ The Lua filter's token-bucket rate limiter stores all state in the Lua VM's memo
 
 **Recommendation:** Back rate limit state with Redis or Envoy's built-in `envoy.filters.http.ratelimit` service with an external rate limit server.
 
-#### 2.9 No credential or key rotation mechanism
+#### 2.8 No credential or key rotation mechanism
 
 There is no tooling or process for rotating the Fernet `ENCRYPTION_KEY`, API tokens, database credentials, or FRP tunnel secrets. A compromised key requires manual intervention across all services.
 
@@ -103,7 +95,7 @@ There is no tooling or process for rotating the Fernet `ENCRYPTION_KEY`, API tok
 
 ### Low
 
-#### 2.10 WebSocket ticket passed as query parameter
+#### 2.9 WebSocket ticket passed as query parameter
 
 Terminal access tickets are sent as a `?ticket=` query parameter during the WebSocket handshake. Query parameters may appear in access logs, load balancer logs, and HTTP `Referer` headers. The ticket is single-use and expires in 60 seconds, which limits the exposure window.
 
@@ -111,7 +103,7 @@ Terminal access tickets are sent as a `?ticket=` query parameter during the WebS
 
 **Recommendation:** Document the log-scrubbing requirement for any reverse proxy in front of the backend. Consider a two-step upgrade where the ticket is sent in the first WebSocket message instead.
 
-#### 2.11 DNS tunneling detection is heuristic-only
+#### 2.10 DNS tunneling detection is heuristic-only
 
 The Lua filter detects DNS tunneling via label length, hostname length, subdomain depth, and hex-pattern heuristics. These can be evaded with short labels, mixed encoding, or slow exfiltration over many queries.
 
@@ -129,53 +121,31 @@ The system is well-architected for small deployments (10–50 agents) but faces 
 
 ### 3.1 Control Plane Bottlenecks
 
-#### 3.1.1 Token Cache (CRITICAL) — Resolved
-
-**Location**: `control_plane/services/backend/control_plane/cache.py`, `auth.py`
-
-Previously a per-worker Python dict with no shared invalidation across workers. Token revocation was invisible to other workers until TTL expired.
-
-**Status**: **Resolved.** Now uses `LayeredCache` with memory (60s) and Redis (60s) layers. Invalidation on token delete/disable clears both layers across all workers. `last_used_at` writes are coalesced via `ThrottledWriter` (once per 10 minutes per token).
-
-#### 3.1.2 IP ACL Verification (HIGH) — Resolved
-
-**Location**: `control_plane/services/backend/control_plane/auth.py`
-
-Previously fetched ALL ACLs for the tenant from DB on every admin request, then looped through in Python for CIDR matching. No composite index on `(tenant_id, enabled)`.
-
-**Status**: **Resolved.** Now uses `LayeredCache` with memory (60s TTL) and Redis (300s TTL) layers, falling back to DB on miss. Invalidation on ACL create/update/delete clears both layers.
-
-#### 3.1.3 Synchronous Last-Used Token Updates (MEDIUM) — Partially Resolved
-
-Token `last_used_at` DB writes are now coalesced via `ThrottledWriter` (at most once per 10 minutes per token), reducing bookkeeping traffic significantly. Writes are still synchronous and inline with request processing.
-
-**Recommendation**: For further optimization, move remaining writes to an async background batch job.
-
-#### 3.1.4 In-Memory Rate Limiter (MEDIUM)
+#### 3.1.1 In-Memory Rate Limiter (MEDIUM)
 
 Falls back to in-memory storage when Redis URL is not configured. In-memory rate limiting does not work across multiple workers — requests can exceed limits by a factor equal to the worker count. Already supports Redis when configured.
 
 **Recommendation**: Require Redis for rate limiting in production deployments.
 
-#### 3.1.5 OpenObserve Integration Fragility (MEDIUM)
+#### 3.1.2 OpenObserve Integration Fragility (MEDIUM)
 
 No retry logic on OpenObserve HTTP calls — transient failures return 502 immediately. Single shared HTTP client with 100-connection limit. No circuit breaker. 15-second timeout may be too short for large log queries.
 
 **Recommendation**: Add exponential backoff retry (3 attempts). Implement circuit breaker pattern. Increase connection pool to 200+.
 
-#### 3.1.6 Heartbeat Flush Inefficiency (MEDIUM)
+#### 3.1.3 Heartbeat Flush Inefficiency (MEDIUM)
 
 Background task runs every 60s: scans ALL Redis heartbeat keys (O(N) SCAN), then issues individual UPDATE queries per agent. With 10,000 agents, this produces 10,000 UPDATE queries every 60 seconds.
 
 **Recommendation**: Use batch UPDATE with VALUES clause. Implement incremental SCAN with cursor.
 
-#### 3.1.7 Audit Trail Unbounded Growth (MEDIUM)
+#### 3.1.4 Audit Trail Unbounded Growth (MEDIUM)
 
 The `AuditTrail` table has a TEXT `details` column with no retention policy. Search queries use `.contains()` which requires full table scans on text fields.
 
 **Recommendation**: Implement TTL-based cleanup (e.g., 90-day retention). Add GIN index on searchable fields for PostgreSQL.
 
-#### 3.1.8 No Resource Limits on CP Services (HIGH)
+#### 3.1.5 No Resource Limits on CP Services (HIGH)
 
 Only OpenObserve has explicit resource limits in `control_plane/docker-compose.yml`. PostgreSQL and backend can consume all host resources under load.
 

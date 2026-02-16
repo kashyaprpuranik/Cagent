@@ -370,7 +370,6 @@ Tokens are managed via the Admin UI (`/tokens`) or API. See [docs/development.md
 
 ## Roadmap
 
-- [ ] Persistent egress volume tracking (Redis backend for byte counts across restarts)
 - [ ] Improved secret management in standalone mode (encrypted local storage)
 - [ ] mTLS for data plane ↔ control plane communication (step-ca)
 - [ ] Alert rules for security events (gVisor syscall denials, rate limit hits)

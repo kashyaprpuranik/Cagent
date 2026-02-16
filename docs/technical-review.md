@@ -76,15 +76,7 @@ When the `ssh` profile is active, the FRP tunnel client is attached to both `age
 
 **Recommendation:** Remove the tunnel client from `agent-net` and proxy SSH access through a dedicated service on `infra-net` only.
 
-#### 2.7 Permissive seccomp profile defeats sandboxing — Mitigated
-
-The `permissive.json` seccomp profile uses `SCMP_ACT_ALLOW` as the default action, only blocking raw sockets. This effectively disables seccomp and allows the agent container to invoke arbitrary syscalls including those needed for container escape (ptrace, mount, unshare, setns).
-
-- `data_plane/configs/seccomp/profiles/permissive.json`
-
-**Status**: Mitigated. The profile is retained for debugging but is now gated behind warnings at every layer: the JSON file itself contains a prominent security warning, the agent-manager logs a WARNING when applying it, both UIs show yellow alert banners when permissive is selected, `cagent.yaml` defaults to `standard` and labels permissive as "debug only", and `docker-compose.yml` does not reference the permissive profile.
-
-#### 2.8 gVisor standard profile disables host seccomp
+#### 2.7 gVisor standard profile disables host seccomp
 
 When running under gVisor (`standard` profile), the agent container sets `seccomp:unconfined`, relying entirely on gVisor's user-space syscall interception. If a gVisor sandbox escape occurs, no host seccomp profile exists as a fallback layer.
 
@@ -92,7 +84,7 @@ When running under gVisor (`standard` profile), the agent container sets `seccom
 
 **Recommendation:** Apply a host-level seccomp profile alongside gVisor to provide defense-in-depth.
 
-#### 2.9 In-memory Lua rate limiting resets on Envoy restart
+#### 2.8 In-memory Lua rate limiting resets on Envoy restart
 
 The Lua filter's token-bucket rate limiter stores all state in the Lua VM's memory. An Envoy restart (crash, config reload, deployment) resets all rate limit windows, allowing a burst of previously-limited requests. Note: this is a data-plane-specific concern — the control plane's rate limiter (`slowapi`) already supports Redis-backed storage.
 
@@ -101,7 +93,7 @@ The Lua filter's token-bucket rate limiter stores all state in the Lua VM's memo
 
 **Recommendation:** Back rate limit state with Redis or Envoy's built-in `envoy.filters.http.ratelimit` service with an external rate limit server.
 
-#### 2.10 No credential or key rotation mechanism
+#### 2.9 No credential or key rotation mechanism
 
 There is no tooling or process for rotating the Fernet `ENCRYPTION_KEY`, API tokens, database credentials, or FRP tunnel secrets. A compromised key requires manual intervention across all services.
 
@@ -111,7 +103,7 @@ There is no tooling or process for rotating the Fernet `ENCRYPTION_KEY`, API tok
 
 ### Low
 
-#### 2.11 WebSocket ticket passed as query parameter
+#### 2.10 WebSocket ticket passed as query parameter
 
 Terminal access tickets are sent as a `?ticket=` query parameter during the WebSocket handshake. Query parameters may appear in access logs, load balancer logs, and HTTP `Referer` headers. The ticket is single-use and expires in 60 seconds, which limits the exposure window.
 
@@ -119,7 +111,7 @@ Terminal access tickets are sent as a `?ticket=` query parameter during the WebS
 
 **Recommendation:** Document the log-scrubbing requirement for any reverse proxy in front of the backend. Consider a two-step upgrade where the ticket is sent in the first WebSocket message instead.
 
-#### 2.12 DNS tunneling detection is heuristic-only
+#### 2.11 DNS tunneling detection is heuristic-only
 
 The Lua filter detects DNS tunneling via label length, hostname length, subdomain depth, and hex-pattern heuristics. These can be evaded with short labels, mixed encoding, or slow exfiltration over many queries.
 

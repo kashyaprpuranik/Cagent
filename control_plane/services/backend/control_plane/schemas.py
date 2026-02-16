@@ -231,6 +231,7 @@ class EmailPolicyCreate(BaseModel):
     name: str  # Account name, e.g. "work-gmail"
     provider: str  # gmail, outlook, generic
     email: str  # Email address
+    profile_id: Optional[int] = None  # NULL = tenant baseline
     agent_id: Optional[str] = None  # NULL = global
 
     # Server overrides
@@ -272,6 +273,7 @@ class EmailPolicyResponse(BaseModel):
     provider: str
     email: str
     enabled: bool
+    profile_id: Optional[int]
     agent_id: Optional[str]
     imap_server: Optional[str]
     imap_port: Optional[int]
@@ -413,26 +415,6 @@ class STCPVisitorConfig(BaseModel):
     proxy_name: str  # "{agent_id}-ssh"
     secret_key: str
 
-
-class TerminalSessionResponse(BaseModel):
-    """Terminal session info for audit logs."""
-    session_id: str
-    agent_id: str
-    user: str
-    started_at: datetime
-    ended_at: Optional[datetime] = None
-    duration_seconds: Optional[int] = None
-    bytes_sent: int
-    bytes_received: int
-
-    class Config:
-        from_attributes = True
-
-
-class TerminalTicketResponse(BaseModel):
-    """Response when creating a WebSocket terminal ticket."""
-    ticket: str
-    expires_in_seconds: int
 
 
 class LogEntry(BaseModel):

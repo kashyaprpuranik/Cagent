@@ -22,7 +22,11 @@
 #   With auditing (log forwarding):
 #     docker-compose --profile standard --profile auditing up -d
 #
-#   With SSH tunnel:
+#   With direct SSH access (port mapping):
+#     SSH_AUTHORIZED_KEYS="ssh-ed25519 AAAA..." docker-compose --profile dev up -d
+#     ssh -p 2222 agent@localhost
+#
+#   With SSH tunnel (FRP/STCP for remote access):
 #     docker-compose --profile standard --profile ssh up -d
 #
 # Network Architecture:
@@ -100,6 +104,10 @@ services:
       # Tmux session settings
       - TMUX_AUTO_ATTACH=${TMUX_AUTO_ATTACH:-1}  # Set to 0 to disable auto-attach
       - TMUX_SESSION=${TMUX_SESSION:-main}       # Default session name
+
+    # SSH access (set SSH_AUTHORIZED_KEYS to enable)
+    ports:
+      - "${SSH_PORT:-2222}:22"
 
     # Volumes
     volumes:
@@ -185,6 +193,10 @@ services:
       - SSH_AUTHORIZED_KEYS=${SSH_AUTHORIZED_KEYS:-}
       - TMUX_AUTO_ATTACH=${TMUX_AUTO_ATTACH:-1}
       - TMUX_SESSION=${TMUX_SESSION:-main}
+
+    # SSH access (set SSH_AUTHORIZED_KEYS to enable)
+    ports:
+      - "${SSH_PORT:-2222}:22"
 
     # Volumes (more restricted in secure mode)
     volumes:
@@ -508,7 +520,7 @@ services:
   # ===========================================================================
   # Tunnel Client - Reverse tunnel for SSH access via STCP
   # Connects outbound to control plane tunnel server
-  # STCP mode: P2P tunneling with unique secret key per agent
+  # STCP mode: tunneling via FRP server with unique secret key per agent
   # Optional: Only runs with --profile ssh
   # ===========================================================================
   tunnel-client:

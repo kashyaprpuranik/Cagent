@@ -11,7 +11,6 @@ import {
   AlertCircle,
   CheckCircle,
   X,
-  Terminal,
 } from 'lucide-react';
 import { Card, Badge, Button, Modal, BlockedDomainsWidget, BlockedTimeseriesChart, BandwidthWidget, DiagnoseModal } from '@cagent/shared-ui';
 import type { DiagnoseResult } from '@cagent/shared-ui';
@@ -32,22 +31,17 @@ import {
   useCreateDomainPolicy,
 } from '../hooks/useApi';
 import { api } from '../api/client';
-import { useQuery } from '@tanstack/react-query';
 
 export function Dashboard() {
   const { user } = useAuth();
   const { selectedTenantId } = useTenant();
   const navigate = useNavigate();
   const { data: health } = useHealth();
-  const { data: info } = useQuery({ queryKey: ['info'], queryFn: () => api.getInfo() });
-  const features = new Set(info?.features || []);
   // Pass tenant filter - super admins see agents for selected tenant, others see their tenant's agents
   const { data: dataPlanes, refetch: refetchDataPlanes } = useDataPlanes(selectedTenantId);
 
   // Role checks for UI gating
   const hasAdminRole = user?.roles?.includes('admin') || user?.is_super_admin;
-  const hasDeveloperRole = user?.roles?.includes('developer') || user?.is_super_admin;
-
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -402,25 +396,6 @@ export function Dashboard() {
                       Wipe
                     </Button>
                   </>
-                )}
-                {/* Terminal button - beta feature, requires developer role */}
-                {features.has('terminal') && hasDeveloperRole && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => navigate(`/terminal/${selectedAgentId}`)}
-                    disabled={!agentStatus?.online || agentStatus?.status !== 'running'}
-                    title={
-                      !agentStatus?.online
-                        ? 'Agent group must be online'
-                        : agentStatus?.status !== 'running'
-                        ? 'Agent group must be running'
-                        : 'Open Web Terminal'
-                    }
-                  >
-                    <Terminal size={14} className="mr-1" />
-                    Terminal
-                  </Button>
                 )}
               </div>
             </div>

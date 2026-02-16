@@ -2,11 +2,11 @@ import json
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, Query
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
-from control_plane.models import EmailPolicy, AuditTrail
+from control_plane.models import EmailPolicy, AuditTrail, SecurityProfile
 from control_plane.schemas import (
     EmailPolicyCreate, EmailPolicyUpdate, EmailPolicyResponse, EmailPolicyCredential,
 )
@@ -26,6 +26,7 @@ def email_policy_to_response(policy: EmailPolicy) -> dict:
         "provider": policy.provider,
         "email": policy.email,
         "enabled": policy.enabled,
+        "profile_id": policy.profile_id,
         "agent_id": policy.agent_id,
         "imap_server": policy.imap_server,
         "imap_port": policy.imap_port,
@@ -50,6 +51,7 @@ async def list_email_policies(
     token_info: TokenInfo = Depends(require_admin_role),
     agent_id: Optional[str] = None,
     tenant_id: Optional[int] = None,
+    profile_id: Optional[int] = Query(default=None, description="Filter by profile ID. Use 0 for baseline (no profile)."),
 ):
     """List email policies."""
     query = db.query(EmailPolicy)
@@ -64,6 +66,12 @@ async def list_email_policies(
         query = query.filter(
             (EmailPolicy.agent_id == agent_id) | (EmailPolicy.agent_id.is_(None))
         )
+
+    if profile_id is not None:
+        if profile_id == 0:
+            query = query.filter(EmailPolicy.profile_id.is_(None))
+        else:
+            query = query.filter(EmailPolicy.profile_id == profile_id)
 
     policies = query.order_by(EmailPolicy.name).all()
     return [email_policy_to_response(p) for p in policies]
@@ -89,9 +97,18 @@ async def create_email_policy(
     if policy.provider not in ("gmail", "outlook", "generic"):
         raise HTTPException(status_code=400, detail="provider must be gmail, outlook, or generic")
 
-    # Check for duplicates
+    # Verify profile exists in same tenant if provided
+    if policy.profile_id is not None:
+        profile = db.query(SecurityProfile).filter(SecurityProfile.id == policy.profile_id).first()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Security profile not found")
+        if profile.tenant_id != effective_tenant_id:
+            raise HTTPException(status_code=400, detail="Security profile must belong to the same tenant")
+
+    # Check for duplicates (including profile_id)
     existing = db.query(EmailPolicy).filter(
         EmailPolicy.name == policy.name,
+        EmailPolicy.profile_id == policy.profile_id,
         EmailPolicy.tenant_id == effective_tenant_id,
     ).first()
     if existing:
@@ -111,6 +128,7 @@ async def create_email_policy(
         name=policy.name,
         provider=policy.provider,
         email=policy.email,
+        profile_id=policy.profile_id,
         agent_id=policy.agent_id,
         imap_server=policy.imap_server,
         imap_port=policy.imap_port,
@@ -129,7 +147,7 @@ async def create_email_policy(
         event_type="email_policy_created",
         user=token_info.token_name or "admin",
         action=f"Email policy created: {policy.name} ({policy.email})",
-        details=json.dumps({"name": policy.name, "provider": policy.provider, "email": policy.email}),
+        details=json.dumps({"name": policy.name, "provider": policy.provider, "email": policy.email, "profile_id": policy.profile_id}),
         severity="INFO",
         tenant_id=effective_tenant_id,
     )

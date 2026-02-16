@@ -116,11 +116,15 @@ class EmailPolicy(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
-    name = Column(String(100), nullable=False)  # Unique per tenant, e.g. "work-gmail"
+    name = Column(String(100), nullable=False)  # Unique per tenant+profile, e.g. "work-gmail"
     provider = Column(String(20), nullable=False)  # gmail, outlook, generic
     email = Column(String(200), nullable=False)  # e.g. agent@company.com
     enabled = Column(Boolean, default=True, index=True)
+    profile_id = Column(Integer, ForeignKey("security_profiles.id"), nullable=True, index=True)  # NULL = tenant baseline
     agent_id = Column(String(100), nullable=True, index=True)  # NULL = tenant-global
+
+    # Relationship
+    security_profile = relationship("SecurityProfile", back_populates="email_policies")
 
     # Server overrides (NULL = use provider defaults)
     imap_server = Column(String(200))
@@ -142,7 +146,7 @@ class EmailPolicy(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
-        UniqueConstraint('name', 'tenant_id', name='uq_email_policy_name_tenant'),
+        UniqueConstraint('name', 'tenant_id', 'profile_id', name='uq_email_policy_name_tenant_profile'),
     )
 
 
@@ -166,6 +170,7 @@ class SecurityProfile(Base):
     # Relationships
     tenant = relationship("Tenant", back_populates="security_profiles")
     domain_policies = relationship("DomainPolicy", back_populates="security_profile")
+    email_policies = relationship("EmailPolicy", back_populates="security_profile")
     agents = relationship("AgentState", back_populates="security_profile")
 
     __table_args__ = (

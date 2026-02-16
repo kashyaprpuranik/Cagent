@@ -1,5 +1,5 @@
 # FRP Server Configuration
-# Accepts connections from data plane agents via STCP (P2P tunneling)
+# Accepts connections from data plane agents via STCP (relayed tunneling)
 # Single control port (7000) - no exposed port range needed
 
 bindPort = 7000
@@ -14,7 +14,7 @@ webServer.port = 7500
 webServer.user = "admin"
 webServer.password = "{{ .Envs.FRP_DASHBOARD_PASSWORD }}"
 
-# STCP Mode: No allowPorts needed - all tunnels use P2P through control port
+# STCP Mode: No allowPorts needed - all tunnels relay through control port
 # Each agent authenticates with unique secretKey in their STCP proxy config
 
 # Logging

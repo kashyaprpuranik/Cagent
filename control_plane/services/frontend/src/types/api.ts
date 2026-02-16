@@ -160,18 +160,6 @@ export interface LogQueryResponse {
   };
 }
 
-// Terminal session types
-export interface TerminalSession {
-  session_id: string;
-  agent_id: string;
-  user: string;
-  started_at: string;
-  ended_at?: string;
-  duration_seconds?: number;
-  bytes_sent: number;
-  bytes_received: number;
-}
-
 export interface STCPConfig {
   server_addr: string;
   server_port: number;
@@ -209,6 +197,7 @@ export interface EmailPolicy {
   provider: 'gmail' | 'outlook' | 'generic';
   email: string;
   enabled: boolean;
+  profile_id?: number;
   agent_id?: string;
   imap_server?: string;
   imap_port?: number;
@@ -235,6 +224,7 @@ export interface CreateEmailPolicyRequest {
   name: string;
   provider: 'gmail' | 'outlook' | 'generic';
   email: string;
+  profile_id?: number;
   agent_id?: string;
   imap_server?: string;
   imap_port?: number;

@@ -63,30 +63,11 @@ The control plane provides centralized management, policy enforcement, secrets s
 | cache | 6379 | Rate limiting store (internal) |
 | tunnel-server | 7000 | Tunnel server for STCP access |
 
-## Web Terminal
+## STCP Tunnel Management
 
-The Admin UI includes a browser-based terminal (xterm.js) for accessing agent containers. This requires the `developer` role.
+The CP manages STCP secrets for FRP-based SSH tunnels but does not relay terminal traffic. Terminal access is via direct SSH (port 2222) or the data plane's local admin web terminal.
 
-**Architecture:**
-```
-Browser (xterm.js) → POST /ticket → WebSocket (?ticket=) → Control Plane API → STCP → FRP → Agent:22
-```
-
-The WebSocket connection uses a short-lived, single-use ticket for authentication. The client first obtains a ticket via a REST call with proper `Authorization` header, then passes the ticket as a query parameter to the WebSocket. This avoids exposing long-lived tokens in WebSocket URLs (which appear in proxy logs).
-
-**STCP Mode**: Uses FRP's Secret TCP mode - all tunnels go through a single port (7000) with secret-key authentication. No port-per-agent allocation needed.
-
-**Setup:**
-
-1. Generate STCP secret for the agent:
-   ```bash
-   curl -X POST http://localhost:8002/api/v1/agents/my-agent/stcp-secret \
-     -H "Authorization: Bearer $TOKEN"
-   ```
-
-2. Configure data plane with the secret (see data-plane README)
-
-3. Access terminal from Admin UI Dashboard
+**STCP Mode**: Uses FRP's Secret TCP mode — all tunnels go through a single port (7000) with secret-key authentication. No port-per-agent allocation needed. Traffic is relayed through the FRP server.
 
 **API Endpoints:**
 
@@ -94,9 +75,6 @@ The WebSocket connection uses a short-lived, single-use ticket for authenticatio
 |--------|----------|-------------|
 | POST | `/api/v1/agents/{agent_id}/stcp-secret` | Generate new STCP secret (admin) |
 | GET | `/api/v1/agents/{agent_id}/stcp-config` | Get STCP visitor config (developer) |
-| POST | `/api/v1/terminal/{agent_id}/ticket` | Get short-lived WebSocket ticket |
-| WS | `/api/v1/terminal/{agent_id}/ws?ticket=` | WebSocket terminal endpoint |
-| GET | `/api/v1/terminal/sessions` | List terminal sessions (audit) |
 
 ## Quick Start
 

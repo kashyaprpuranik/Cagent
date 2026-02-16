@@ -16,8 +16,8 @@ from control_plane.database import Base, engine
 from control_plane.models import (  # noqa: F401 - ensure models are registered
     Tenant, TenantIpAcl, AuditTrail, DomainPolicy, EmailPolicy,
     SecurityProfile, AgentState, TerminalSession, ApiToken, WebSocketTicket,
-)
-from control_plane.routes import health, logs, domain_policies, email_policies, agents, terminal, tenants, ip_acls, tokens, analytics, security_profiles
+)  # TerminalSession + WebSocketTicket kept for DB table creation (historical data)
+from control_plane.routes import health, logs, domain_policies, email_policies, agents, tenants, ip_acls, tokens, analytics, security_profiles
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -81,7 +81,6 @@ if "email" in BETA_FEATURES:
     app.include_router(email_policies.router)
 app.include_router(security_profiles.router)
 app.include_router(agents.router)
-app.include_router(terminal.router)
 app.include_router(tenants.router)
 app.include_router(ip_acls.router)
 app.include_router(tokens.router)

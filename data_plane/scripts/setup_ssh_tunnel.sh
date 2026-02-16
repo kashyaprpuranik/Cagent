@@ -7,7 +7,7 @@
 # This script:
 #   1. Generates STCP secret via control plane API (agent_id derived from token)
 #   2. Updates .env with tunnel configuration
-#   3. Restarts the frpc container
+#   3. Restarts the tunnel-client container
 #
 # Usage:
 #   ./setup_ssh_tunnel.sh [OPTIONS]
@@ -17,6 +17,7 @@
 #   --token TOKEN          Agent token (default: from .env CONTROL_PLANE_TOKEN)
 #   --frp-server HOST      FRP server address (default: control plane host)
 #   --frp-port PORT        FRP server port (default: 7000)
+#   --frp-token TOKEN      FRP auth token (default: from .env FRP_AUTH_TOKEN)
 #
 # =============================================================================
 
@@ -63,6 +64,10 @@ while [[ $# -gt 0 ]]; do
             FRP_SERVER_PORT="$2"
             shift 2
             ;;
+        --frp-token)
+            FRP_AUTH_TOKEN="$2"
+            shift 2
+            ;;
         --help|-h)
             head -25 "$0" | tail -20
             exit 0
@@ -89,11 +94,17 @@ if [[ -z "$CONTROL_PLANE_TOKEN" ]]; then
     exit 1
 fi
 
+if [[ -z "$FRP_AUTH_TOKEN" ]]; then
+    log_error "FRP_AUTH_TOKEN is required. Set in .env or pass --frp-token"
+    exit 1
+fi
+
 echo ""
 log_info "STCP SSH Tunnel Setup"
 echo "======================================"
 echo "Control Plane: $CONTROL_PLANE_URL"
 echo "FRP Server:    $FRP_SERVER_ADDR:$FRP_SERVER_PORT"
+echo "FRP Auth:      ${FRP_AUTH_TOKEN:0:8}..."
 echo ""
 
 # =============================================================================
@@ -155,16 +166,17 @@ update_env "CONTROL_PLANE_URL" "$CONTROL_PLANE_URL"
 update_env "CONTROL_PLANE_TOKEN" "$CONTROL_PLANE_TOKEN"
 update_env "FRP_SERVER_ADDR" "$FRP_SERVER_ADDR"
 update_env "FRP_SERVER_PORT" "$FRP_SERVER_PORT"
+update_env "FRP_AUTH_TOKEN" "$FRP_AUTH_TOKEN"
 update_env "STCP_PROXY_NAME" "$STCP_PROXY_NAME"
 update_env "STCP_SECRET_KEY" "$STCP_SECRET_KEY"
 
 log_info "Updated .env with tunnel configuration"
 
 # =============================================================================
-# Step 3: Restart frpc container
+# Step 3: Restart tunnel-client container
 # =============================================================================
 
-log_step "Starting SSH tunnel (frpc container)..."
+log_step "Starting SSH tunnel (tunnel-client container)..."
 
 # Check if docker-compose or docker compose is available
 if command -v docker-compose &> /dev/null; then
@@ -176,11 +188,11 @@ else
     exit 1
 fi
 
-# Stop existing frpc if running
-$COMPOSE_CMD --profile ssh stop frpc 2>/dev/null || true
+# Stop existing tunnel-client if running
+$COMPOSE_CMD --profile ssh stop tunnel-client 2>/dev/null || true
 
-# Start frpc
-$COMPOSE_CMD --profile ssh up -d frpc
+# Start tunnel-client
+$COMPOSE_CMD --profile ssh up -d tunnel-client
 
 log_info "SSH tunnel started"
 
@@ -202,6 +214,9 @@ cat > "$VISITOR_CONFIG" << EOF
 
 serverAddr = "${FRP_SERVER_ADDR}"
 serverPort = ${FRP_SERVER_PORT}
+
+auth.method = "token"
+auth.token = "${FRP_AUTH_TOKEN}"
 
 [[visitors]]
 name = "${STCP_PROXY_NAME}-visitor"

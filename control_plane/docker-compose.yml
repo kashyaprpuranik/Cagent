@@ -182,6 +182,8 @@ services:
   tunnel-server:
     image: snowdreamtech/frps:latest
     container_name: tunnel-server
+    profiles:
+      - ssh
 
     environment:
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN:-changeme}
@@ -193,7 +195,7 @@ services:
     ports:
       - "7000:7000"       # FRP control port (agents connect here via STCP)
       - "7500:7500"       # FRP dashboard
-      # STCP mode: No SSH tunnel ports needed - P2P tunneling through control port
+      # STCP mode: No SSH tunnel ports needed - traffic relayed through control port
 
     deploy:
       resources:

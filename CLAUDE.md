@@ -78,7 +78,7 @@ There is also:
 | Database | PostgreSQL (production), SQLite (dev/test) |
 | Cache | Redis (rate limiting) |
 | Frontend | React 18, TypeScript, Vite, TailwindCSS, TanStack React Query |
-| Terminal | xterm.js (WebSocket-based browser terminal) |
+| Terminal | xterm.js (local admin WebSocket terminal), direct SSH (port 2222) |
 | Proxy | Envoy (HTTP egress gateway with credential injection) |
 | DNS | CoreDNS (domain allowlist enforcement) |
 | Logging | Vector (log collection), OpenObserve (storage/query) |

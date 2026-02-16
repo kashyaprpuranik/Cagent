@@ -7,12 +7,10 @@
 - **Defense-in-depth is real, not marketing.** Network isolation (no default gateway, internal-only Docker network), DNS allowlisting (CoreDNS NXDOMAIN for unlisted domains), HTTP proxy enforcement (Envoy with Lua filter), container hardening (seccomp, gVisor, no-new-privileges), and credential injection at egress — each layer independently prevents a class of attack.
 - **Credential injection via Envoy Lua filter is a strong design choice.** The agent never sees raw API keys. Credentials are decrypted and injected at the proxy, which means a compromised agent process cannot exfiltrate secrets from its own environment.
 - **Multi-tenancy is well-scoped.** Tenant isolation is enforced at the database layer, the API layer (token scoping), and the log layer (per-tenant OpenObserve organizations). Agent tokens cannot access cross-tenant data.
-- **Audit trail is comprehensive.** Terminal sessions, policy changes, token lifecycle, and agent commands are all logged with tenant attribution.
+- **Audit trail is comprehensive.** Policy changes, token lifecycle, and agent commands are all logged with tenant attribution.
 - **The standalone/connected duality is practical.** Single-developer usage (static `cagent.yaml`) and enterprise usage (centralized control plane with multi-tenancy) share the same data plane code.
 
 ### Weaknesses
-
-- **Control plane WebSocket terminal relay is not yet wired up.** The control plane's `terminal.py:206-229` echoes input back as a placeholder for a paramiko SSH relay. However, terminal access works through two other paths: in standalone mode, the local admin provides a fully functional `docker exec`-based terminal over WebSocket; in connected mode, the STCP tunnel (FRP) provides direct SSH access. The control plane WebSocket is a convenience path for browser-based remote access that hasn't been completed yet.
 
 ---
 
@@ -87,13 +85,11 @@ There is no tooling or process for rotating the Fernet `ENCRYPTION_KEY`, API tok
 
 ### Low
 
-#### 2.8 WebSocket ticket passed as query parameter
+#### 2.8 WebSocket ticket passed as query parameter (Local Admin only)
 
-Terminal access tickets are sent as a `?ticket=` query parameter during the WebSocket handshake. Query parameters may appear in access logs, load balancer logs, and HTTP `Referer` headers. The ticket is single-use and expires in 60 seconds, which limits the exposure window.
+The local admin terminal uses WebSocket tickets as a `?ticket=` query parameter during the WebSocket handshake. Query parameters may appear in access logs and HTTP `Referer` headers. The ticket is single-use and expires in 60 seconds, limiting the exposure window. The local admin UI is only accessible from the host machine (localhost:8081).
 
-- `control_plane/services/backend/control_plane/routes/terminal.py:125`
-
-**Recommendation:** Document the log-scrubbing requirement for any reverse proxy in front of the backend. Consider a two-step upgrade where the ticket is sent in the first WebSocket message instead.
+**Recommendation:** If the local admin UI is ever exposed beyond localhost, add log-scrubbing for the ticket parameter. Consider a two-step upgrade where the ticket is sent in the first WebSocket message instead.
 
 #### 2.9 DNS tunneling detection is heuristic-only
 
@@ -113,29 +109,17 @@ The system is well-architected for small deployments (10–50 agents) but faces 
 
 ### 3.1 Control Plane Bottlenecks
 
-#### 3.1.1 In-Memory Rate Limiter (MEDIUM)
-
-Falls back to in-memory storage when Redis URL is not configured. In-memory rate limiting does not work across multiple workers — requests can exceed limits by a factor equal to the worker count. Already supports Redis when configured.
-
-**Recommendation**: Require Redis for rate limiting in production deployments.
-
-#### 3.1.2 OpenObserve Integration Fragility (MEDIUM)
+#### 3.1.1 OpenObserve Integration Fragility (MEDIUM)
 
 No retry logic on OpenObserve HTTP calls — transient failures return 502 immediately. Single shared HTTP client with 100-connection limit. No circuit breaker. 15-second timeout may be too short for large log queries.
 
 **Recommendation**: Add exponential backoff retry (3 attempts). Implement circuit breaker pattern. Increase connection pool to 200+.
 
-#### 3.1.3 Heartbeat Flush Inefficiency (MEDIUM)
+#### 3.1.2 Heartbeat Flush Inefficiency (MEDIUM)
 
 Background task runs every 60s: scans ALL Redis heartbeat keys (O(N) SCAN), then issues individual UPDATE queries per agent. With 10,000 agents, this produces 10,000 UPDATE queries every 60 seconds.
 
 **Recommendation**: Use batch UPDATE with VALUES clause. Implement incremental SCAN with cursor.
-
-#### 3.1.4 Audit Trail Unbounded Growth (MEDIUM)
-
-The `AuditTrail` table has a TEXT `details` column with no retention policy. Search queries use `.contains()` which requires full table scans on text fields.
-
-**Recommendation**: Implement TTL-based cleanup (e.g., 90-day retention). Add GIN index on searchable fields for PostgreSQL.
 
 ### 3.2 Data Plane Bottlenecks
 

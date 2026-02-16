@@ -247,6 +247,64 @@ curl "http://localhost:8002/api/v1/domain-policies/for-domain?domain=api.example
   -H "Authorization: Bearer <prod-agent-token>"
 ```
 
+## SSH Access
+
+Agent containers run an SSH server (key-auth only, no passwords, no root login). SSH is exposed on host port 2222 by default.
+
+### Quick Start
+
+```bash
+# Set your public key and start the agent
+SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose --profile dev up -d
+
+# Connect
+ssh -p 2222 agent@localhost
+```
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SSH_AUTHORIZED_KEYS` | (empty) | Public key(s) to authorize, newline-separated |
+| `SSH_PORT` | `2222` | Host port mapped to container SSH (port 22) |
+
+You can also mount a keys file instead of (or in addition to) the environment variable:
+
+```yaml
+# In docker-compose.yml, uncomment:
+volumes:
+  - ./ssh-keys/authorized_keys:/ssh-keys/authorized_keys:ro
+```
+
+### Persistent Sessions (tmux)
+
+SSH sessions auto-attach to a tmux session. Work persists across SSH disconnects and container restarts (the tmux socket is stored on the persistent `/workspace` volume).
+
+```bash
+# List sessions
+ssh -p 2222 agent@localhost session list
+
+# Detach from tmux: Ctrl+B, then D
+# Reconnect: ssh again — auto-attaches to existing session
+```
+
+### Multiple Agents
+
+When scaling agents (`--scale agent-dev=N`), each container needs a unique host port. Use a port range:
+
+```bash
+# In .env or shell
+SSH_PORT=2222-2232
+
+# Find which port maps to which container
+docker compose port --index 1 agent-dev 22
+docker compose port --index 2 agent-dev 22
+```
+
+### Remote SSH (via STCP Tunnel)
+
+For agents on remote hosts not directly reachable, use the FRP STCP tunnel instead of port mapping. See the [STCP tunnel configuration](#) in the data plane docker-compose (`--profile ssh`).
+
 ## Log Querying
 
 Agent logs (Envoy, CoreDNS, gVisor, container stdout/stderr) are queryable via the Control Plane API.

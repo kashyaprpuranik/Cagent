@@ -419,11 +419,12 @@ export function useBulkAssignAgentProfile() {
 }
 
 // Email Policies
-export function useEmailPolicies(params?: { agentId?: string; tenantId?: number | null }) {
+export function useEmailPolicies(params?: { agentId?: string; profileId?: number; tenantId?: number | null }) {
   return useQuery({
-    queryKey: ['emailPolicies', params?.agentId, params?.tenantId],
+    queryKey: ['emailPolicies', params?.agentId, params?.profileId, params?.tenantId],
     queryFn: () => api.getEmailPolicies({
       agentId: params?.agentId,
+      profileId: params?.profileId,
       tenantId: params?.tenantId ?? undefined,
     }),
     enabled: params?.tenantId !== null,

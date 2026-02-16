@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { Plus, Edit2, Trash2, RefreshCw, Mail, Search } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { Plus, Edit2, Trash2, RefreshCw, Mail, Search, ChevronDown } from 'lucide-react';
 import { Card, Table, Button, Modal, Input, Select, Badge } from '@cagent/shared-ui';
 import {
   useEmailPolicies,
@@ -7,6 +7,7 @@ import {
   useUpdateEmailPolicy,
   useDeleteEmailPolicy,
   useAgents,
+  useSecurityProfiles,
 } from '../hooks/useApi';
 import { useTenant } from '../contexts/TenantContext';
 import type { EmailPolicy, DataPlane, CreateEmailPolicyRequest, UpdateEmailPolicyRequest } from '../types/api';
@@ -55,8 +56,26 @@ const emptyFormData: FormData = {
 
 export function EmailPolicies() {
   const { selectedTenantId } = useTenant();
+  const { data: profiles } = useSecurityProfiles(selectedTenantId);
+  const [selectedProfileId, setSelectedProfileId] = useState<number | undefined>(undefined);
 
-  const { data: policies = [], isLoading, refetch } = useEmailPolicies({ tenantId: selectedTenantId });
+  // Auto-select the first profile (usually "default") when profiles load
+  useEffect(() => {
+    if (profiles?.length && selectedProfileId === undefined) {
+      const defaultProfile = profiles.find(p => p.name === 'default');
+      setSelectedProfileId(defaultProfile?.id ?? profiles[0].id);
+    }
+  }, [profiles, selectedProfileId]);
+
+  // Reset profile selection when tenant changes
+  useEffect(() => {
+    setSelectedProfileId(undefined);
+  }, [selectedTenantId]);
+
+  const { data: policies = [], isLoading, refetch } = useEmailPolicies({
+    profileId: selectedProfileId,
+    tenantId: selectedTenantId,
+  });
   const { data: agents = [] } = useAgents();
   const createPolicy = useCreateEmailPolicy();
   const updatePolicy = useUpdateEmailPolicy();
@@ -138,6 +157,7 @@ export function EmailPolicies() {
       name: formData.name,
       provider: formData.provider as 'gmail' | 'outlook' | 'generic',
       email: formData.email,
+      profile_id: selectedProfileId,
       agent_id: formData.agent_id || undefined,
       imap_server: formData.imap_server || undefined,
       imap_port: formData.imap_port ? parseInt(formData.imap_port) : undefined,
@@ -518,6 +538,31 @@ export function EmailPolicies() {
             <Plus size={16} className="mr-2" />
             New Account
           </Button>
+        </div>
+      </div>
+
+      {/* Profile Selector */}
+      <div>
+        <label className="block text-sm font-medium text-dark-300 mb-2">
+          Profile
+        </label>
+        <div className="relative w-72">
+          <select
+            value={selectedProfileId ?? ''}
+            onChange={(e) => setSelectedProfileId(Number(e.target.value))}
+            className="w-full appearance-none bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 pr-8 text-sm text-dark-100 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+          >
+            {!profiles?.length && (
+              <option value="">No profiles available</option>
+            )}
+            {profiles?.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <ChevronDown
+            size={16}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 pointer-events-none"
+          />
         </div>
       </div>
 

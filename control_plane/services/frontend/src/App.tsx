@@ -13,7 +13,6 @@ import { RuntimePolicies } from './pages/RuntimePolicies';
 import { ResourcePolicies } from './pages/ResourcePolicies';
 import { SecurityProfiles } from './pages/SecurityProfiles';
 import { Login } from './pages/Login';
-import { Terminal } from './pages/Terminal';
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api/client';
 import { useAuth } from './contexts/AuthContext';
@@ -66,9 +65,6 @@ function App() {
         <Route path="tokens" element={<Tokens />} />
         <Route path="tenants" element={<Tenants />} />
         <Route path="settings" element={<Settings />} />
-        {features.has('terminal') && (
-          <Route path="terminal/:agentId" element={<Terminal />} />
-        )}
       </Route>
       {/* Redirects for legacy routes */}
       <Route path="/secrets" element={<Navigate to="/domain-policies" replace />} />

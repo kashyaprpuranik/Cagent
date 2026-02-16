@@ -27,6 +27,8 @@ os.environ["ENCRYPTION_KEY"] = Fernet.generate_key().decode()
 os.environ["SEED_TOKENS"] = "true"
 # Disable multi-tenant by default in tests (individual tests opt in)
 os.environ["OPENOBSERVE_MULTI_TENANT"] = "false"
+# Enable beta features so email policy routes are registered
+os.environ["BETA_FEATURES"] = "email"
 
 # Per-worker SQLite file. Must be set at module level so config.py (which reads
 # DATABASE_URL on import) sees the correct value even when test files import

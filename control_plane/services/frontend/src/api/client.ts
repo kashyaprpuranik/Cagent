@@ -364,9 +364,10 @@ export const api = {
   },
 
   // Email Policies
-  getEmailPolicies: async (params?: { agentId?: string; tenantId?: number }): Promise<EmailPolicy[]> => {
+  getEmailPolicies: async (params?: { agentId?: string; profileId?: number; tenantId?: number }): Promise<EmailPolicy[]> => {
     const searchParams = new URLSearchParams();
     if (params?.agentId) searchParams.append('agent_id', params.agentId);
+    if (params?.profileId !== undefined) searchParams.append('profile_id', String(params.profileId));
     if (params?.tenantId !== undefined) searchParams.append('tenant_id', String(params.tenantId));
     const queryString = searchParams.toString();
     const url = queryString ? `${API_BASE}/email-policies?${queryString}` : `${API_BASE}/email-policies`;
@@ -418,15 +419,6 @@ export const api = {
       body: JSON.stringify(data),
     });
     return handleResponse<SecuritySettings>(response);
-  },
-
-  // Terminal Tickets
-  getTerminalTicket: async (agentId: string): Promise<{ ticket: string; expires_in_seconds: number }> => {
-    const response = await fetch(`${API_BASE}/terminal/${encodeURIComponent(agentId)}/ticket`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-    });
-    return handleResponse<{ ticket: string; expires_in_seconds: number }>(response);
   },
 
   // Info (features, version)

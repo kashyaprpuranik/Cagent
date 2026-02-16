@@ -311,16 +311,30 @@ docker compose --profile standard --profile admin --profile ssh up -d
 
 ## SSH Access
 
-### Via Web Terminal (Recommended)
+### Direct SSH (Recommended)
+
+SSH is exposed on host port 2222 by default. Set your public key and connect:
+
+```bash
+# Start with SSH key
+SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose --profile dev up -d
+
+# Connect
+ssh -p 2222 agent@localhost
+```
+
+Configure the host port with `SSH_PORT` (default: 2222). Sessions auto-attach to tmux for persistence across disconnects.
+
+### Via Web Terminal
 
 The local admin UI includes a browser-based terminal:
 1. Go to http://localhost:8080/terminal
 2. Select container (agent, dns-filter, http-proxy)
 3. Click Connect
 
-### Via STCP Tunnel
+### Via STCP Tunnel (Remote Access)
 
-For SSH client access, configure an STCP tunnel:
+For SSH access to agents on remote hosts, configure an STCP tunnel:
 
 1. **Configure tunnel** in Local Admin UI → SSH Tunnel page
 2. **Start tunnel** - creates frpc container

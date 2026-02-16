@@ -244,6 +244,18 @@ docker compose exec backend /bin/bash
 docker compose exec frontend /bin/sh
 ```
 
+### SSH into Agent Container
+
+```bash
+# Start with your SSH key
+SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose --profile dev up -d
+
+# Connect (default port 2222)
+ssh -p 2222 agent@localhost
+
+# Sessions persist via tmux — reconnect after disconnect
+```
+
 ### Reset Database
 
 ```bash
@@ -268,7 +280,7 @@ SEED_TOKENS=true docker compose up -d
 │       │   ├── control_plane/  # Python package (routes, models, auth, etc.)
 │       │   ├── seed.py         # Pre-seed (auth infrastructure, direct DB)
 │       │   └── post_seed.py    # Post-seed (domain policies, IP ACLs, via API)
-│       └── frontend/           # React admin console with web terminal
+│       └── frontend/           # React admin console
 │
 └── data_plane/
     ├── docker-compose.yml          # Data plane services

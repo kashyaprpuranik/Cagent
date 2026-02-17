@@ -100,19 +100,22 @@ if [ "$RUN_E2E" = true ]; then
     cp configs/cagent.yaml configs/.cagent.yaml.bak
     cp configs/coredns/Corefile configs/coredns/.Corefile.bak
 
-    if [ "$NEED_RESTART" = true ]; then
-        echo "Stopping any existing containers first..."
-        docker compose --profile dev --profile admin --profile email --profile auditing down 2>/dev/null || true
-        docker compose --profile standard --profile admin --profile email --profile auditing down 2>/dev/null || true
-        # Remove orphan containers (e.g. echo-server from e2e tests) that may hold network IPs
-        for net in cagent-infra-net cagent-agent-net; do
+    # Always clean up stale networks (may have wrong labels from previous runs)
+    for net in cagent-infra-net cagent-agent-net; do
+        if docker network inspect "$net" >/dev/null 2>&1; then
             for cid in $(docker network inspect "$net" --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do
                 echo "  Removing orphan container $cid from $net..."
                 docker stop "$cid" 2>/dev/null || true
                 docker rm "$cid" 2>/dev/null || true
             done
             docker network rm "$net" 2>/dev/null || true
-        done
+        fi
+    done
+
+    if [ "$NEED_RESTART" = true ]; then
+        echo "Stopping any existing containers first..."
+        docker compose --profile dev --profile admin --profile email --profile auditing down 2>/dev/null || true
+        docker compose --profile standard --profile admin --profile email --profile auditing down 2>/dev/null || true
         echo "Starting data plane (standalone, --profile dev --profile admin --profile auditing, 2 agents)..."
         DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build --scale agent-dev=2
         CONTAINERS_STARTED=true

@@ -393,15 +393,9 @@ services:
       - CONTROL_PLANE_URL=${CONTROL_PLANE_URL}
       - CONTROL_PLANE_TOKEN=${CONTROL_PLANE_TOKEN}
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30}
-      # Config paths
-      - CAGENT_CONFIG_PATH=/etc/cagent/cagent.yaml
-      - COREDNS_COREFILE_PATH=/etc/coredns/Corefile
-      - ENVOY_CONFIG_PATH=/etc/envoy/envoy.yaml
       - CONFIG_SYNC_INTERVAL=${CONFIG_SYNC_INTERVAL:-300}
-      - SECCOMP_PROFILES_DIR=/etc/seccomp/profiles
       # Local admin settings
       - DATA_PLANE_DIR=/app/data_plane
-      - BETA_FEATURES=${BETA_FEATURES:-}
 
     volumes:
       # Docker socket for container management

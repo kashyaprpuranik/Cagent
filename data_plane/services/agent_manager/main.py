@@ -1063,8 +1063,7 @@ app.include_router(logs.router, prefix="/api", tags=["logs"])
 app.include_router(terminal.router, prefix="/api", tags=["terminal"])
 app.include_router(analytics.router, prefix="/api", tags=["analytics"])
 app.include_router(domain_policy.router, tags=["domain-policy"])
-if "ssh-tunnel" in BETA_FEATURES:
-    app.include_router(ssh_tunnel.router, prefix="/api", tags=["ssh-tunnel"])
+app.include_router(ssh_tunnel.router, prefix="/api", tags=["ssh-tunnel"])
 # Always register the tunnel-config proxy (used by FRP entrypoint)
 app.include_router(ssh_tunnel.proxy_router, tags=["tunnel-proxy"])
 

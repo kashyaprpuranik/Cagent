@@ -47,12 +47,6 @@ COPY data_plane/services/agent_manager/ /app/
 # Copy built frontend (may not exist in managed-only builds)
 COPY --from=frontend-builder /app/data_plane/services/local_admin/frontend/dist ./frontend/dist
 
-# Create non-root user with docker group access
-ARG DOCKER_GID=124
-RUN groupadd -g ${DOCKER_GID} docker || true && \
-    useradd -m -u 1000 -G ${DOCKER_GID} appuser
-USER appuser
-
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8080

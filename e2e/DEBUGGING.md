@@ -49,7 +49,7 @@ for line in sys.stdin:
 docker logs agent-manager --tail 30   # Config generation, CP polling
 docker logs dns-filter --tail 30      # DNS queries and blocks
 docker logs log-shipper --tail 30     # Log ingestion pipeline
-docker logs local-admin --tail 30     # Local admin API
+docker logs agent-manager --tail 30   # Agent manager API + admin endpoints
 docker logs backend --tail 30         # CP API (auth, policies, heartbeats)
 ```
 
@@ -66,7 +66,7 @@ infra-net (10.200.2.0/24 — can reach CP and external)
 ├── http-proxy        10.200.2.10
 ├── agent-manager     10.200.2.20+
 ├── log-shipper       10.200.2.30+
-└── local-admin       10.200.2.40+
+└── (agent-manager serves admin API on infra-net)
 
 e2e-bridge (created by e2e/run_tests.sh for CP+DP tests)
 └── Connects agent-manager, log-shipper, http-proxy to CP backend

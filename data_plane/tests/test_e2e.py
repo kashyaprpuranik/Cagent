@@ -716,7 +716,16 @@ class TestLocalAdminConfigPipeline:
                 ["docker", "restart", "agent-manager"],
                 capture_output=True, timeout=30,
             )
-            time.sleep(3)
+            # Wait for agent-manager API to be ready (not just container "Up")
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                try:
+                    r = requests.get(f"{admin_url}/api/health", timeout=3)
+                    if r.status_code == 200:
+                        break
+                except Exception:
+                    pass
+                time.sleep(1)
             requests.post(f"{admin_url}/api/config/reload", timeout=15)
 
 

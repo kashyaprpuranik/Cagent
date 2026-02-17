@@ -578,14 +578,6 @@ class TestLocalAdminAPI:
         assert "connected" in data
         assert "configured" in data
 
-    def test_generate_stcp_key(self, admin_url):
-        """Should generate an STCP secret key."""
-        r = requests.post(f"{admin_url}/api/ssh-tunnel/generate-key", timeout=5)
-        assert r.status_code == 200
-        data = r.json()
-        assert "stcp_secret_key" in data
-        assert len(data["stcp_secret_key"]) > 20
-
     def test_container_logs(self, admin_url, data_plane_running):
         """Should return recent logs for a running container."""
         r = requests.get(

@@ -64,9 +64,9 @@ agent-net (10.200.1.0/24, internal — no external access)
 infra-net (10.200.2.0/24 — can reach CP and external)
 ├── dns-filter        10.200.2.5
 ├── http-proxy        10.200.2.10
-├── agent-manager     10.200.2.20+
+├── agent-manager     10.200.2.20+  (admin UI + domain policy API)
 ├── log-shipper       10.200.2.30+
-└── (agent-manager serves admin API on infra-net)
+└── email-proxy       (beta, --profile email)
 
 e2e-bridge (created by e2e/run_tests.sh for CP+DP tests)
 └── Connects agent-manager, log-shipper, http-proxy to CP backend

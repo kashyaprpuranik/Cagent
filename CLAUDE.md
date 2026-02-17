@@ -48,18 +48,18 @@ There is also:
 │       └── frontend/               # React admin UI (Vite + TypeScript + TailwindCSS)
 │
 ├── data_plane/
-│   ├── docker-compose.yml          # DP services (agent, envoy, coredns, vector, local-admin, email-proxy)
+│   ├── docker-compose.yml          # DP services (agent, envoy, coredns, vector, agent-manager, email-proxy)
 │   ├── agent.Dockerfile            # Agent container image
 │   ├── configs/
 │   │   ├── cagent.yaml             # Unified config (source of truth for DNS + proxy)
 │   │   ├── coredns/Corefile        # DNS filter config (generated from cagent.yaml)
 │   │   ├── envoy/                  # HTTP proxy config (generated from cagent.yaml)
-│   │   ├── vector/vector.yaml      # Log collection/forwarding
+│   │   ├── vector/                 # Log collection (sources/transforms + mode-specific sinks)
 │   │   ├── seccomp/                # Seccomp profile for agent container
 │   │   └── gvisor/runsc.toml       # gVisor runtime config
 │   ├── services/
-│   │   ├── agent_manager/          # Polls CP, generates CoreDNS + Envoy configs
-│   │   ├── local_admin/            # Standalone mode admin UI (FastAPI + React)
+│   │   ├── agent_manager/          # Config sync, admin UI, domain policy API
+│   │   ├── local_admin/            # Admin UI frontend source (built into agent-manager)
 │   │   └── email_proxy/            # Email egress control (beta)
 │   └── tests/                      # Unit and E2E tests
 │
@@ -164,7 +164,7 @@ cd control_plane && docker compose down -v
 # CP admin UI
 cd control_plane/services/frontend && npm install && npm run dev
 
-# Local admin UI
+# Admin UI (built into agent-manager)
 cd data_plane/services/local_admin/frontend && npm install && npm run dev
 
 # Lint (fails on any warning)
@@ -208,7 +208,7 @@ npm run lint
 
 - **Networks**: `agent-net` (10.200.1.0/24, internal, no external access) and `infra-net` (10.200.2.0/24, can reach CP). IPv6 disabled to prevent bypass
 - **Static IPs**: dns-filter=10.200.1.5, http-proxy=10.200.1.10, agent=10.200.1.20
-- **Profiles**: `dev` (runc), `standard` (gVisor), `admin` (local admin UI), `auditing` (log shipping), `ssh` (FRP tunnel), `email` (email proxy), `managed` (agent manager)
+- **Profiles**: `dev` (runc), `standard` (gVisor), `admin` (admin UI via agent-manager), `managed` (agent-manager without UI), `auditing` (log shipping), `ssh` (FRP tunnel), `email` (email proxy - beta)
 - **Config generation**: `cagent.yaml` is the source of truth. Agent manager generates CoreDNS Corefile and Envoy config from it
 - **Security layers**: Seccomp profile blocks raw sockets, gVisor intercepts syscalls, Envoy enforces domain allowlist/rate limits/path filtering, CoreDNS blocks unauthorized DNS
 
@@ -233,7 +233,8 @@ npm run lint
 | `control_plane/services/backend/post_seed.py` | API-based seeding (domain policies) |
 | `data_plane/configs/cagent.yaml` | Unified data plane config |
 | `data_plane/services/agent_manager/config_generator.py` | Generates CoreDNS + Envoy configs |
-| `data_plane/services/agent_manager/main.py` | Agent manager service (polling, heartbeat) |
+| `data_plane/services/agent_manager/main.py` | Agent manager: FastAPI app, polling loop, admin UI |
+| `data_plane/services/agent_manager/routers/domain_policy.py` | Domain policy API for Envoy Lua filter |
 | `dev_up.sh` | Full stack dev orchestration |
 | `run_tests.sh` | Unified test runner |
 

@@ -166,20 +166,18 @@ Adds agent-manager (watches `cagent.yaml`) and local admin UI for browser-based 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     DATA PLANE (managed)                         │
+│                         DATA PLANE                               │
 │                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                 Local Admin UI (:8080)                      ││
-│  │  • Config editor    • Health checks    • Web terminal       ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                              │                                   │
-│  ┌──────────────┐    ┌──────┴──────┐                            │
-│  │Agent Manager │◄───│ cagent.yaml│──── generates ───┐         │
-│  └──────────────┘    └─────────────┘                  │         │
-│                                                       ▼         │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                    agent-net (isolated)                     ││
-│  │    ┌─────────────────────────────────────────────────┐     ││
+│  ┌──────────────────────────────────────────┐                   │
+│  │        Agent Manager (:8081)             │                   │
+│  │  • Admin UI (config, terminal, logs)     │                   │
+│  │  • Watches cagent.yaml, regenerates      │                   │
+│  │    DNS filter + HTTP proxy configs       │                   │
+│  └──────────────┬───────────────────────────┘                   │
+│                 │                                                │
+│  ┌──────────────┼──────────────────────────────────────────────┐│
+│  │              │          agent-net (isolated)                 ││
+│  │    ┌─────────┴───────────────────────────────────────┐     ││
 │  │    │                 Agent Container                  │     ││
 │  │    └─────────────────────────────────────────────────┘     ││
 │  │                 │                       │                   ││
@@ -200,11 +198,53 @@ docker compose --profile standard --profile admin up -d
 docker compose --profile dev --profile admin up -d
 ```
 
-**Local Admin UI** (http://localhost:8080):
+**Admin UI** (http://localhost:8081):
 - Structured config editor (domains, rate limits, credentials)
 - Container status with health checks
 - Log viewer with traffic analytics
 - Browser-based web terminal
+
+#### Locally Managed with Auditing
+
+Adds log collection for standalone deployments. Logs are written to local files by default. Configure S3 or Elasticsearch sinks in `configs/vector/sinks/standalone.yaml` for external shipping.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         DATA PLANE                               │
+│                                                                  │
+│  ┌──────────────────────────┐  ┌──────────────────────────────┐│
+│  │   Agent Manager (:8081)  │  │   Log Shipper               ││
+│  │   admin UI, config sync  │  │   file (default), S3, or ES ││
+│  └──────────────┬───────────┘  └──────────────────────────────┘│
+│                 │                                                │
+│  ┌──────────────┼──────────────────────────────────────────────┐│
+│  │              │          agent-net (isolated)                 ││
+│  │    ┌─────────┴───────────────────────────────────────┐     ││
+│  │    │                 Agent Container                  │     ││
+│  │    └─────────────────────────────────────────────────┘     ││
+│  │                 │                       │                   ││
+│  │          ┌──────┴──────┐         ┌──────┴──────┐           ││
+│  │          │ HTTP Proxy  │         │ DNS Filter  │           ││
+│  │          └─────────────┘         └─────────────┘           ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                                                                  │
+│  Optional:                                                       │
+│  ┌──────────────────────────────────────────┐                   │
+│  │      Email Proxy (:8025) - beta          │                   │
+│  │  • IMAP/SMTP with per-recipient policy   │                   │
+│  └──────────────────────────────────────────┘                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+```bash
+cd data_plane
+
+# With auditing (log collection to local files)
+docker compose --profile dev --profile admin --profile auditing up -d
+
+# With email proxy (beta)
+docker compose --profile dev --profile admin --profile auditing --profile email up -d
+```
 
 ### Control Plane Mode
 
@@ -237,11 +277,12 @@ Run with centralized management via the control plane. Ideal for multiple tenant
 │                │                                                            │
 │             (can run on client laptop or server or provider servers)        │
 │                │                                                            │
-│  ┌─────────────┴──────────────────┐                                        │
-│  │  Agent Manager   Log Shipper  │                                        │
-│  │  polls CP,       ships logs   │                                        │
-│  │  syncs configs   to CP        │                                        │
-│  └────────────────────────────────┘                                        │
+│  ┌─────────────┴──────┐  ┌──────────────┐  ┌───────────────────────┐      │
+│  │  Agent Manager     │  │ Log Shipper  │  │ Email Proxy  (beta)  │      │
+│  │  polls CP,         │  │ ships logs   │  │ IMAP/SMTP proxy      │      │
+│  │  syncs configs,    │  │ to CP        │  └───────────────────────┘      │
+│  │  serves admin UI   │  └──────────────┘                                 │
+│  └────────────────────┘                                                    │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
 │  │                        agent-net (isolated)                             ││
@@ -305,7 +346,7 @@ docker compose --profile dev up -d
 
 | Method | Standalone | Control Plane Mode |
 |--------|------------|-------------------|
-| **Web Terminal** | http://<local-admin-ui>:8080 → Terminal | N/A (use SSH) |
+| **Web Terminal** | http://localhost:8081 → Terminal | N/A (use SSH) |
 | **Docker exec** | `docker exec -it agent bash` | N/A (use SSH) |
 | **SSH** | Configure via Local Admin UI | Direct SSH (port 2222) |
 
@@ -324,6 +365,7 @@ The web terminal is available in the local admin UI. See [data_plane/README.md](
 | **Multi-Agent Management** | Manage multiple data planes with start/stop/restart/wipe from UI |
 | **IP ACLs** | Restrict control plane access by IP range per tenant |
 | **gVisor Isolation** | Optional kernel-level syscall isolation for defense in depth |
+| **Email Proxy** | Controlled IMAP/SMTP access with per-recipient policies - **beta** |
 
 ## Configuration
 

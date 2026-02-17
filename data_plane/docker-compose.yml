@@ -36,7 +36,9 @@
 #
 #   infra-net (can reach control plane)
 #     └── http-proxy, dns-filter (bridged to agent-net)
+#     └── agent-manager (config sync, admin UI, domain policy API)
 #     └── log-shipper (log forwarding) - optional
+#     └── email-proxy (IMAP/SMTP proxy) - optional, beta
 #
 # Security Controls:
 #   - Agent has no direct internet/CP access (IP bypass prevention)

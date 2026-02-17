@@ -291,10 +291,10 @@ SEED_TOKENS=true docker compose up -d
     │   ├── vector/             # Log collection & forwarding
     │   └── frpc/               # FRP client config (STCP tunnels)
     ├── services/
-    │   ├── agent_manager/      # Container lifecycle + config generation
-    │   ├── local_admin/        # Local admin UI (standalone mode)
-    │   │   ├── frontend/       # React app with web terminal
-    │   │   └── backend/        # FastAPI backend
-    │   └── config_generator/   # cagent.yaml → DNS filter/HTTP proxy configs
+    │   ├── agent_manager/      # Config sync, admin UI, domain policy API
+    │   │   └── routers/        # FastAPI route handlers
+    │   ├── local_admin/        # Admin UI frontend source (built into agent-manager)
+    │   │   └── frontend/       # React app with web terminal
+    │   └── email_proxy/        # Email egress control (IMAP/SMTP) - beta
     └── tests/                  # Unit and E2E tests
 ```

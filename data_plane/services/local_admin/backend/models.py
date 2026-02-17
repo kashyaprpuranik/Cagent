@@ -52,17 +52,6 @@ class ContainerAction(BaseModel):
 
 
 class SshTunnelConfig(BaseModel):
-    frp_server_addr: str
-    frp_server_port: int = 7000
     frp_auth_token: str
-    stcp_proxy_name: str
-    stcp_secret_key: Optional[str] = None  # Auto-generated if not provided
-
-
-class SshTunnelStatus(BaseModel):
-    enabled: bool
-    connected: bool
-    stcp_proxy_name: Optional[str] = None
-    frp_server: Optional[str] = None
-    container_status: Optional[str] = None
-    stcp_secret_key: Optional[str] = None
+    frp_server_addr: Optional[str] = None  # Default: derived from CONTROL_PLANE_URL
+    frp_server_port: int = 7000

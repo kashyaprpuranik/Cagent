@@ -158,27 +158,26 @@ export const createLogStream = (name: string): WebSocket => {
 export interface SshTunnelStatus {
   enabled: boolean;
   connected: boolean;
-  stcp_proxy_name?: string;
   frp_server?: string;
   frp_server_port?: string;
   container_status?: string;
-  stcp_secret_key?: string;
   configured: boolean;
+  control_plane_url?: string;
+  has_cp_token: boolean;
+  has_frp_token: boolean;
 }
 
 export interface SshTunnelConfig {
-  frp_server_addr: string;
-  frp_server_port: number;
   frp_auth_token: string;
-  stcp_proxy_name?: string;
-  stcp_secret_key?: string;
+  frp_server_addr?: string;
+  frp_server_port: number;
 }
 
 export interface SshConnectInfo {
-  stcp_proxy_name: string;
+  proxy_name: string;
   frp_server: string;
   frp_port: string;
-  stcp_secret_key: string;
+  secret_key: string;
   ssh_command: string;
   visitor_config: string;
 }
@@ -251,17 +250,11 @@ export const getDiagnosis = (domain: string) =>
 
 export const getSshTunnelStatus = () => request<SshTunnelStatus>('/ssh-tunnel');
 
-export const generateStcpKey = () =>
-  request<{ stcp_secret_key: string }>('/ssh-tunnel/generate-key', { method: 'POST' });
-
 export const configureSshTunnel = (config: SshTunnelConfig) =>
-  request<{ status: string; stcp_proxy_name: string; stcp_secret_key: string; message: string }>(
-    '/ssh-tunnel/configure',
-    {
-      method: 'POST',
-      body: JSON.stringify(config),
-    }
-  );
+  request<{ status: string; message: string }>('/ssh-tunnel/configure', {
+    method: 'POST',
+    body: JSON.stringify(config),
+  });
 
 export const startSshTunnel = () =>
   request<{ status: string; message: string }>('/ssh-tunnel/start', { method: 'POST' });

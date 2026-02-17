@@ -17,11 +17,12 @@ from control_plane.schemas import (
 )
 from control_plane.crypto import encrypt_secret, decrypt_secret
 from control_plane.auth import (
-    TokenInfo, verify_token, require_admin_role, require_developer_role,
+    TokenInfo, verify_token, require_agent, require_admin_role, require_developer_role,
     require_admin_role_with_ip_check, _get_redis_client,
 )
 from control_plane.cache import security_profile_cache, agent_state_cache
 from control_plane.utils import verify_agent_access, get_audit_tenant_id
+from control_plane.config import BETA_FEATURES
 from control_plane.rate_limit import limiter
 from control_plane.redis_client import write_heartbeat, is_agent_online as redis_is_agent_online
 
@@ -640,6 +641,61 @@ async def generate_stcp_secret_from_token(
         secret_key=secret,
         proxy_name=f"{agent_id}-ssh",
         message="Save this secret - it will not be shown again. Use it as STCP_SECRET_KEY in data plane .env"
+    )
+
+
+@router.post("/api/v1/agent/tunnel-config", response_model=STCPSecretResponse)
+@limiter.limit("10/minute")
+async def get_or_create_tunnel_config(
+    request: Request,
+    db: Session = Depends(get_db),
+    token_info: TokenInfo = Depends(require_agent)
+):
+    """Idempotent get-or-create tunnel config for self-bootstrapping.
+
+    Used by the tunnel-client entrypoint to auto-provision STCP credentials.
+    If a secret already exists, it is decrypted and returned.
+    If not, a new secret is generated, stored, and returned.
+    Agent token only — the agent_id is derived from the token.
+    Beta feature: requires BETA_FEATURES=ssh on control plane.
+    """
+    if "ssh" not in BETA_FEATURES:
+        raise HTTPException(status_code=404, detail="SSH tunnel feature is not enabled")
+
+    agent_id = token_info.agent_id
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="Agent token missing agent_id")
+
+    state = db.query(AgentState).filter(
+        AgentState.agent_id == agent_id,
+        AgentState.deleted_at.is_(None)
+    ).first()
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+    if state.stcp_secret_key:
+        # Already provisioned — decrypt and return existing secret
+        secret = decrypt_secret(state.stcp_secret_key)
+    else:
+        # Generate new secret and store encrypted
+        secret = secrets.token_urlsafe(32)
+        state.stcp_secret_key = encrypt_secret(secret)
+
+        log = AuditTrail(
+            event_type="stcp_secret_generated",
+            user=token_info.token_name or "agent",
+            action=f"STCP tunnel config auto-provisioned for agent {agent_id}",
+            severity="INFO",
+            tenant_id=get_audit_tenant_id(token_info, db, state)
+        )
+        db.add(log)
+        db.commit()
+
+    return STCPSecretResponse(
+        agent_id=agent_id,
+        secret_key=secret,
+        proxy_name=f"{agent_id}-ssh",
+        message="Tunnel config provisioned successfully"
     )
 
 

@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from .routers import health, config, containers, logs, terminal, ssh_tunnel, analytics
+from .constants import BETA_FEATURES
 
 app = FastAPI(
     title="Cagent Local Admin",
@@ -38,7 +39,8 @@ app.include_router(config.router, prefix="/api", tags=["config"])
 app.include_router(containers.router, prefix="/api", tags=["containers"])
 app.include_router(logs.router, prefix="/api", tags=["logs"])
 app.include_router(terminal.router, prefix="/api", tags=["terminal"])
-app.include_router(ssh_tunnel.router, prefix="/api", tags=["ssh-tunnel"])
+if "ssh-tunnel" in BETA_FEATURES:
+    app.include_router(ssh_tunnel.router, prefix="/api", tags=["ssh-tunnel"])
 app.include_router(analytics.router, prefix="/api", tags=["analytics"])
 
 # =============================================================================

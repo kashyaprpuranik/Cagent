@@ -301,9 +301,9 @@ docker compose port --index 1 agent-dev 22
 docker compose port --index 2 agent-dev 22
 ```
 
-### Remote SSH (via STCP Tunnel)
+### Remote SSH (via STCP Tunnel) - Beta
 
-For agents on remote hosts not directly reachable, use the FRP STCP tunnel instead of port mapping. See the [STCP tunnel configuration](#) in the data plane docker-compose (`--profile ssh`).
+For remote SSH access via STCP tunnel, enable with `BETA_FEATURES=ssh-tunnel` and `--profile ssh`. The tunnel-client self-bootstraps its credentials from the control plane API.
 
 ## Log Querying
 

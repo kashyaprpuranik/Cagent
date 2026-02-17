@@ -313,20 +313,7 @@ docker compose --profile dev up -d
 | **Docker exec** | `docker exec -it agent bash` | N/A (use SSH) |
 | **SSH** | Configure via Local Admin UI | Configure via CP API |
 
-The web terminal is available in the local admin UI. For remote agents managed by the control plane, use SSH via STCP tunnel.
-
-For SSH access in Control Plane Mode (remote data planes):
-```bash
-cd data_plane
-./scripts/setup_ssh_tunnel.sh --control-plane http://<cp-ip>:8002 --token admin-token
-```
-
-Or manually:
-1. Generate STCP secret: `curl -X POST http://localhost:8002/api/v1/agents/my-agent/stcp-secret -H "Authorization: Bearer admin-token"`
-2. Add to `data_plane/.env`: `STCP_SECRET_KEY=<secret>`, `FRP_SERVER_ADDR=<control-plane-ip>`
-3. Start with SSH profile: `docker compose --profile standard --profile ssh up -d`
-
-See [data_plane/README.md](data_plane/README.md#ssh-access) for details.
+The web terminal is available in the local admin UI. See [data_plane/README.md](data_plane/README.md#ssh-access) for SSH access options.
 
 ## Features
 
@@ -340,7 +327,6 @@ See [data_plane/README.md](data_plane/README.md#ssh-access) for details.
 | **Web Terminal** | Browser-based shell access to agents (xterm.js) |
 | **Multi-Agent Management** | Manage multiple data planes with start/stop/restart/wipe from UI |
 | **IP ACLs** | Restrict control plane access by IP range per tenant |
-| **STCP Tunnels** | Secure remote access via single port with auto-configuration |
 | **gVisor Isolation** | Optional kernel-level syscall isolation for defense in depth |
 
 ## Configuration

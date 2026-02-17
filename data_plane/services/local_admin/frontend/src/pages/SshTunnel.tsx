@@ -4,8 +4,6 @@ import {
   Terminal,
   Play,
   Square,
-  RefreshCw,
-  Key,
   Copy,
   CheckCircle,
   AlertCircle,
@@ -17,7 +15,6 @@ import {
   configureSshTunnel,
   startSshTunnel,
   stopSshTunnel,
-  generateStcpKey,
   getSshConnectInfo,
   SshTunnelConfig,
 } from '../api/client';
@@ -31,10 +28,9 @@ export default function SshTunnelPage() {
 
   // Form state
   const [formData, setFormData] = useState<SshTunnelConfig>({
+    frp_auth_token: '',
     frp_server_addr: '',
     frp_server_port: 7000,
-    frp_auth_token: '',
-    stcp_secret_key: '',
   });
 
   const { data: status, isLoading } = useQuery({
@@ -66,6 +62,7 @@ export default function SshTunnelPage() {
     mutationFn: startSshTunnel,
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['ssh-tunnel-status'] });
+      queryClient.invalidateQueries({ queryKey: ['ssh-connect-info'] });
       setMessage({ type: 'success', text: result.message });
       setTimeout(() => setMessage(null), 3000);
     },
@@ -86,13 +83,6 @@ export default function SshTunnelPage() {
     },
   });
 
-  const generateKeyMutation = useMutation({
-    mutationFn: generateStcpKey,
-    onSuccess: (result) => {
-      setFormData((prev) => ({ ...prev, stcp_secret_key: result.stcp_secret_key }));
-    },
-  });
-
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     setCopied(label);
@@ -101,12 +91,7 @@ export default function SshTunnelPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const data = { ...formData };
-    // Auto-generate proxy name if not already set
-    if (!data.stcp_proxy_name) {
-      data.stcp_proxy_name = `agent-${crypto.randomUUID().slice(0, 8)}`;
-    }
-    configureMutation.mutate(data);
+    configureMutation.mutate(formData);
   };
 
   if (isLoading) {
@@ -122,7 +107,7 @@ export default function SshTunnelPage() {
             SSH Tunnel
           </h1>
           <p className="text-sm text-gray-400 mt-1">
-            STCP tunnel for secure SSH access via FRP
+            Self-bootstrapping STCP tunnel for secure SSH access via FRP
           </p>
         </div>
       </div>
@@ -170,10 +155,6 @@ export default function SshTunnelPage() {
 
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div>
-            <span className="text-gray-400 text-sm">Proxy Name</span>
-            <p className="text-white">{status?.stcp_proxy_name || '-'}</p>
-          </div>
-          <div>
             <span className="text-gray-400 text-sm">FRP Server</span>
             <p className="text-white">
               {status?.frp_server ? `${status.frp_server}:${status.frp_server_port}` : '-'}
@@ -184,9 +165,23 @@ export default function SshTunnelPage() {
             <p className="text-white capitalize">{status?.container_status || '-'}</p>
           </div>
           <div>
-            <span className="text-gray-400 text-sm">STCP Secret</span>
-            <p className="text-white font-mono text-sm">
-              {status?.stcp_secret_key ? `${status.stcp_secret_key.slice(0, 12)}...` : '-'}
+            <span className="text-gray-400 text-sm">Control Plane</span>
+            <p className="text-white text-sm truncate">
+              {status?.control_plane_url || '-'}
+            </p>
+          </div>
+          <div>
+            <span className="text-gray-400 text-sm">Credentials</span>
+            <p className="text-white text-sm">
+              {status?.configured ? (
+                <span className="text-green-400">Auto-provisioned from CP</span>
+              ) : (
+                <span className="text-gray-500">
+                  {!status?.has_cp_token && 'Missing CP token. '}
+                  {!status?.has_frp_token && 'Missing FRP token.'}
+                  {status?.has_cp_token && status?.has_frp_token && 'Missing CP URL.'}
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -216,11 +211,9 @@ export default function SshTunnelPage() {
             onClick={() => {
               if (status) {
                 setFormData({
+                  frp_auth_token: '',
                   frp_server_addr: status.frp_server || '',
                   frp_server_port: parseInt(status.frp_server_port || '7000'),
-                  frp_auth_token: '',
-                  stcp_proxy_name: status.stcp_proxy_name || '',
-                  stcp_secret_key: status.stcp_secret_key || '',
                 });
               }
               setShowConfig(true);
@@ -236,7 +229,7 @@ export default function SshTunnelPage() {
               onClick={() => setShowConnectInfo(!showConnectInfo)}
               className="flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg"
             >
-              <Key className="w-4 h-4" />
+              <Shield className="w-4 h-4" />
               Connection Info
             </button>
           )}
@@ -252,30 +245,10 @@ export default function SshTunnelPage() {
           </h2>
 
           <p className="text-gray-400 text-sm mb-4">
-            To connect to this agent via SSH, you need to run an FRP visitor on your local machine.
+            To connect to this agent via SSH, run an FRP visitor on your local machine with the config below.
           </p>
 
           <div className="space-y-4">
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-400 text-sm">STCP Secret Key</span>
-                <button
-                  onClick={() => copyToClipboard(connectInfo.stcp_secret_key, 'secret')}
-                  className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-sm"
-                >
-                  {copied === 'secret' ? (
-                    <CheckCircle className="w-3 h-3" />
-                  ) : (
-                    <Copy className="w-3 h-3" />
-                  )}
-                  Copy
-                </button>
-              </div>
-              <p className="font-mono text-sm text-white bg-gray-900 p-2 rounded mt-1 break-all">
-                {connectInfo.stcp_secret_key}
-              </p>
-            </div>
-
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-gray-400 text-sm">Visitor Config (frpc-visitor.toml)</span>
@@ -322,20 +295,40 @@ export default function SshTunnelPage() {
       {showConfig && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 w-full max-w-lg">
-            <h2 className="text-lg font-semibold text-white mb-4">Configure SSH Tunnel</h2>
+            <h2 className="text-lg font-semibold text-white mb-2">Configure SSH Tunnel</h2>
+            <p className="text-sm text-gray-400 mb-4">
+              STCP credentials are auto-provisioned from the control plane.
+              Only FRP server settings are needed here.
+            </p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm text-gray-400 mb-1">FRP Server Address</label>
+                <label className="block text-sm text-gray-400 mb-1">FRP Auth Token</label>
+                <input
+                  type="password"
+                  value={formData.frp_auth_token}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, frp_auth_token: e.target.value }))
+                  }
+                  placeholder="Must match frps.toml on control plane"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">
+                  FRP Server Address
+                  <span className="text-gray-500 ml-1">(optional, derived from CP URL)</span>
+                </label>
                 <input
                   type="text"
                   value={formData.frp_server_addr}
                   onChange={(e) =>
                     setFormData((prev) => ({ ...prev, frp_server_addr: e.target.value }))
                   }
-                  placeholder="frp.example.com"
+                  placeholder="Leave empty to use control plane host"
                   className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
-                  required
                 />
               </div>
 
@@ -350,46 +343,6 @@ export default function SshTunnelPage() {
                   className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
                   required
                 />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">FRP Auth Token</label>
-                <input
-                  type="password"
-                  value={formData.frp_auth_token}
-                  onChange={(e) =>
-                    setFormData((prev) => ({ ...prev, frp_auth_token: e.target.value }))
-                  }
-                  placeholder="Server authentication token"
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">STCP Secret Key</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={formData.stcp_secret_key}
-                    onChange={(e) =>
-                      setFormData((prev) => ({ ...prev, stcp_secret_key: e.target.value }))
-                    }
-                    placeholder="Leave empty to auto-generate"
-                    className="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white font-mono text-sm focus:border-blue-500 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => generateKeyMutation.mutate()}
-                    disabled={generateKeyMutation.isPending}
-                    className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded flex items-center gap-1"
-                  >
-                    <RefreshCw
-                      className={`w-4 h-4 ${generateKeyMutation.isPending ? 'animate-spin' : ''}`}
-                    />
-                    Generate
-                  </button>
-                </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-4">

@@ -1,5 +1,8 @@
-import secrets
+import json
+import logging
 from pathlib import Path
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 import docker
 from fastapi import APIRouter, HTTPException
@@ -8,6 +11,7 @@ from ..constants import FRPC_CONTAINER_NAME, DATA_PLANE_DIR, docker_client
 from ..models import SshTunnelConfig
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def read_env_file() -> dict:
@@ -67,45 +71,76 @@ def get_tunnel_client_status() -> dict:
         return {"exists": False, "status": "error", "error": str(e)}
 
 
+def _fetch_tunnel_config(cp_url: str, token: str) -> dict:
+    """Call CP tunnel-config endpoint to get STCP credentials."""
+    url = f"{cp_url}/api/v1/agent/tunnel-config"
+    req = Request(url, data=b"", method="POST", headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    })
+    try:
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except URLError as e:
+        raise HTTPException(502, f"Failed to reach control plane: {e}")
+    except json.JSONDecodeError:
+        raise HTTPException(502, "Invalid response from control plane")
+
+
+def _derive_frp_server(cp_url: str) -> str:
+    """Derive FRP server address from control plane URL host."""
+    # Strip protocol and port: http://host:8002 -> host
+    host = cp_url.split("://", 1)[-1].split(":")[0].split("/")[0]
+    return host
+
+
 @router.get("/ssh-tunnel")
 async def get_ssh_tunnel_status():
     """Get SSH tunnel status and configuration."""
     env_vars = read_env_file()
     tunnel_status = get_tunnel_client_status()
 
+    cp_url = env_vars.get("CONTROL_PLANE_URL", "")
+    cp_token = env_vars.get("CONTROL_PLANE_TOKEN", "")
+    frp_token = env_vars.get("FRP_AUTH_TOKEN", "")
+    frp_server = env_vars.get("FRP_SERVER_ADDR") or (_derive_frp_server(cp_url) if cp_url else "")
+    frp_port = env_vars.get("FRP_SERVER_PORT", "7000")
+
+    configured = bool(cp_url and cp_token and frp_token)
+
     return {
         "enabled": tunnel_status.get("exists", False) and tunnel_status.get("status") == "running",
         "connected": tunnel_status.get("status") == "running",
-        "stcp_proxy_name": env_vars.get("STCP_PROXY_NAME"),
-        "frp_server": env_vars.get("FRP_SERVER_ADDR"),
-        "frp_server_port": env_vars.get("FRP_SERVER_PORT", "7000"),
+        "frp_server": frp_server,
+        "frp_server_port": frp_port,
         "container_status": tunnel_status.get("status"),
-        "stcp_secret_key": env_vars.get("STCP_SECRET_KEY"),
-        "configured": bool(env_vars.get("FRP_SERVER_ADDR") and env_vars.get("STCP_SECRET_KEY"))
+        "configured": configured,
+        "control_plane_url": cp_url,
+        "has_cp_token": bool(cp_token),
+        "has_frp_token": bool(frp_token),
     }
-
-
-@router.post("/ssh-tunnel/generate-key")
-async def generate_stcp_key():
-    """Generate a new STCP secret key."""
-    key = secrets.token_urlsafe(32)
-    return {"stcp_secret_key": key}
 
 
 @router.post("/ssh-tunnel/configure")
 async def configure_ssh_tunnel(config: SshTunnelConfig):
-    """Configure SSH tunnel with FRP settings."""
-    # Generate secret key if not provided
-    stcp_key = config.stcp_secret_key or secrets.token_urlsafe(32)
+    """Configure SSH tunnel FRP settings.
 
-    # Update .env file
+    CONTROL_PLANE_URL and CONTROL_PLANE_TOKEN should already be in .env
+    from connected-mode setup. This endpoint sets the FRP-specific vars.
+    """
+    env_vars = read_env_file()
+
+    if not env_vars.get("CONTROL_PLANE_URL"):
+        raise HTTPException(400, "CONTROL_PLANE_URL not set in .env. Configure connected mode first.")
+    if not env_vars.get("CONTROL_PLANE_TOKEN"):
+        raise HTTPException(400, "CONTROL_PLANE_TOKEN not set in .env. Configure connected mode first.")
+
     env_updates = {
-        "FRP_SERVER_ADDR": config.frp_server_addr,
-        "FRP_SERVER_PORT": str(config.frp_server_port),
         "FRP_AUTH_TOKEN": config.frp_auth_token,
-        "STCP_PROXY_NAME": config.stcp_proxy_name,
-        "STCP_SECRET_KEY": stcp_key
+        "FRP_SERVER_PORT": str(config.frp_server_port),
     }
+    if config.frp_server_addr:
+        env_updates["FRP_SERVER_ADDR"] = config.frp_server_addr
 
     try:
         write_env_file(env_updates)
@@ -114,9 +149,7 @@ async def configure_ssh_tunnel(config: SshTunnelConfig):
 
     return {
         "status": "configured",
-        "stcp_proxy_name": config.stcp_proxy_name,
-        "stcp_secret_key": stcp_key,
-        "message": "Configuration saved. Use start endpoint to enable tunnel."
+        "message": "FRP configuration saved. STCP credentials will be auto-provisioned on start."
     }
 
 
@@ -133,19 +166,27 @@ def create_tunnel_client_container(env_vars: dict):
     except docker.errors.NotFound:
         raise HTTPException(500, "Network data_plane_infra-net not found. Is the data plane running?")
 
-    # Create container
+    container_env = {
+        "CONTROL_PLANE_URL": env_vars.get("CONTROL_PLANE_URL"),
+        "CONTROL_PLANE_TOKEN": env_vars.get("CONTROL_PLANE_TOKEN"),
+        "FRP_AUTH_TOKEN": env_vars.get("FRP_AUTH_TOKEN"),
+        "FRP_SERVER_PORT": env_vars.get("FRP_SERVER_PORT", "7000"),
+    }
+    frp_server = env_vars.get("FRP_SERVER_ADDR")
+    if frp_server:
+        container_env["FRP_SERVER_ADDR"] = frp_server
+
+    # Create container with bootstrap entrypoint
     container = docker_client.containers.create(
         image="snowdreamtech/frpc:latest",
         name=FRPC_CONTAINER_NAME,
-        environment={
-            "FRP_SERVER_ADDR": env_vars.get("FRP_SERVER_ADDR"),
-            "FRP_SERVER_PORT": env_vars.get("FRP_SERVER_PORT", "7000"),
-            "FRP_AUTH_TOKEN": env_vars.get("FRP_AUTH_TOKEN"),
-            "STCP_PROXY_NAME": env_vars.get("STCP_PROXY_NAME"),
-            "STCP_SECRET_KEY": env_vars.get("STCP_SECRET_KEY"),
-        },
+        entrypoint=["/bin/sh", "/bootstrap/entrypoint.sh"],
+        environment=container_env,
         volumes={
-            f"{DATA_PLANE_DIR}/configs/frpc/frpc.toml": {"bind": "/etc/frp/frpc.toml", "mode": "ro"}
+            f"{DATA_PLANE_DIR}/configs/frpc/entrypoint.sh": {
+                "bind": "/bootstrap/entrypoint.sh",
+                "mode": "ro",
+            }
         },
         restart_policy={"Name": "unless-stopped"},
         detach=True,
@@ -161,9 +202,8 @@ def create_tunnel_client_container(env_vars: dict):
 @router.post("/ssh-tunnel/start")
 async def start_ssh_tunnel():
     """Start SSH tunnel by bringing up tunnel client container."""
-    # Check if configured
     env_vars = read_env_file()
-    required = ["FRP_SERVER_ADDR", "FRP_AUTH_TOKEN", "STCP_PROXY_NAME", "STCP_SECRET_KEY"]
+    required = ["CONTROL_PLANE_URL", "CONTROL_PLANE_TOKEN", "FRP_AUTH_TOKEN"]
     missing = [k for k in required if not env_vars.get(k)]
 
     if missing:
@@ -213,27 +253,32 @@ async def stop_ssh_tunnel():
 
 @router.get("/ssh-tunnel/connect-info")
 async def get_connect_info():
-    """Get SSH connection info for this agent."""
+    """Get SSH connection info by fetching STCP config from control plane."""
     env_vars = read_env_file()
 
-    if not env_vars.get("STCP_SECRET_KEY"):
-        raise HTTPException(400, "Tunnel not configured")
+    cp_url = env_vars.get("CONTROL_PLANE_URL")
+    cp_token = env_vars.get("CONTROL_PLANE_TOKEN")
+    if not cp_url or not cp_token:
+        raise HTTPException(400, "Control plane not configured. Set CONTROL_PLANE_URL and CONTROL_PLANE_TOKEN.")
 
-    proxy_name = env_vars.get("STCP_PROXY_NAME")
-    secret_key = env_vars.get("STCP_SECRET_KEY")
-    frp_server = env_vars.get("FRP_SERVER_ADDR")
+    # Fetch tunnel config from CP (idempotent — returns existing secret)
+    tunnel_data = _fetch_tunnel_config(cp_url, cp_token)
+
+    proxy_name = tunnel_data.get("proxy_name", "")
+    secret_key = tunnel_data.get("secret_key", "")
+    if not proxy_name or not secret_key:
+        raise HTTPException(502, "Unexpected response from control plane tunnel-config endpoint")
+
+    frp_server = env_vars.get("FRP_SERVER_ADDR") or _derive_frp_server(cp_url)
     frp_port = env_vars.get("FRP_SERVER_PORT", "7000")
+    frp_token = env_vars.get("FRP_AUTH_TOKEN", "<YOUR_FRP_AUTH_TOKEN>")
 
-    if not proxy_name:
-        raise HTTPException(400, "STCP_PROXY_NAME not configured. Run setup_ssh_tunnel.sh first.")
-
-    # Generate frpc visitor config for connecting
     visitor_config = f"""# FRP Visitor Configuration - Save as frpc-visitor.toml
 # Run: frpc -c frpc-visitor.toml
 serverAddr = "{frp_server}"
 serverPort = {frp_port}
 auth.method = "token"
-auth.token = "<YOUR_FRP_AUTH_TOKEN>"
+auth.token = "{frp_token}"
 
 [[visitors]]
 name = "{proxy_name}-visitor"
@@ -245,10 +290,10 @@ bindPort = 2222
 """
 
     return {
-        "stcp_proxy_name": proxy_name,
+        "proxy_name": proxy_name,
         "frp_server": frp_server,
         "frp_port": frp_port,
-        "stcp_secret_key": secret_key,
+        "secret_key": secret_key,
         "ssh_command": "ssh -p 2222 agent@127.0.0.1  # After starting visitor",
-        "visitor_config": visitor_config
+        "visitor_config": visitor_config,
     }

@@ -173,7 +173,7 @@ Features:
   - Container status monitoring with health checks
   - Log viewer with traffic analytics
   - Browser-based web terminal
-  - SSH tunnel setup (Auto-STCP)
+  - SSH tunnel setup (beta, requires `BETA_FEATURES=ssh-tunnel`)
 - Single `cagent.yaml` configuration file
 - No external dependencies
 
@@ -188,7 +188,7 @@ The local admin UI provides full management capabilities for standalone deployme
 | **Config Validation** | Domain format, CIDR syntax, required fields validated |
 | **Log Viewer** | Live log streaming with traffic analytics (requests/sec, top domains) |
 | **Web Terminal** | Browser-based shell into containers (xterm.js) |
-| **SSH Tunnel Setup** | Configure STCP tunnel with auto-generated secret keys |
+| **SSH Tunnel Setup** | Configure STCP tunnel (beta, requires `BETA_FEATURES=ssh-tunnel`) |
 
 ### Config Editor Tabs
 
@@ -286,7 +286,7 @@ docker compose --profile dev --profile email up -d
 | `managed` | agent-manager | Config file watching |
 | `admin` | agent-manager + local-admin UI | Web-based management |
 | `auditing` | log-shipper | Forward logs to control plane |
-| `ssh` | tunnel-client (STCP tunnel) | Remote SSH access |
+| `ssh` | tunnel-client (STCP tunnel) | Remote SSH access - **beta** |
 | `email` | email-proxy | Controlled email access (IMAP/SMTP) - **beta** |
 
 ```bash
@@ -304,9 +304,6 @@ docker compose --profile dev --profile admin up -d
 
 # With audit logging
 docker compose --profile standard --profile admin --profile auditing up -d
-
-# With SSH access via STCP tunnel
-docker compose --profile standard --profile admin --profile ssh up -d
 ```
 
 ## SSH Access
@@ -332,26 +329,9 @@ The local admin UI includes a browser-based terminal:
 2. Select container (agent, dns-filter, http-proxy)
 3. Click Connect
 
-### Via STCP Tunnel (Remote Access)
+### Via STCP Tunnel (Remote Access) - Beta
 
-For SSH access to agents on remote hosts, configure an STCP tunnel:
-
-1. **Configure tunnel** in Local Admin UI → SSH Tunnel page
-2. **Start tunnel** - creates frpc container
-3. **Get visitor config** - download frpc-visitor.toml for your local machine
-4. **Connect**: `ssh -p 2222 agent@127.0.0.1`
-
-Or configure manually:
-```bash
-# In .env
-FRP_SERVER_ADDR=frp-server-host
-FRP_AUTH_TOKEN=your-token
-STCP_PROXY_NAME=my-agent-ssh    # From setup_ssh_tunnel.sh
-STCP_SECRET_KEY=generated-secret
-
-# Start with SSH profile
-docker compose --profile ssh up -d
-```
+For SSH access to agents on remote hosts via STCP tunnel, enable with `BETA_FEATURES=ssh-tunnel` and `--profile ssh`. The tunnel-client self-bootstraps its credentials from the control plane API.
 
 ## Agent Image Variants
 
@@ -369,7 +349,6 @@ AGENT_VARIANT=lean  # or dev, ml
 ## Security Controls
 
 - **Network Isolation**: Agent on internal-only network (`internal: true`), no default gateway
-- **iptables Fallback**: Optional script adds explicit DROP rules (run `sudo ./scripts/network_hardening.sh`)
 - **Seccomp Profile**: Blocks raw socket creation to prevent packet-crafting bypass
 - **IPv6 Disabled**: Prevents bypass of IPv4 egress controls
 - **DNS Filtering**: Only allowlisted domains resolve
@@ -407,7 +386,8 @@ data_plane/
 │   ├── vector/
 │   │   └── vector.yaml         # Log collection config
 │   └── frpc/
-│       └── frpc.toml           # FRP client configuration
+│       ├── entrypoint.sh       # Self-bootstrapping entrypoint
+│       └── frpc.toml           # FRP client configuration (legacy, unused)
 ├── services/
 │   ├── agent_manager/          # Container lifecycle + config generation
 │   ├── email_proxy/            # Email proxy (IMAP/SMTP with OAuth)

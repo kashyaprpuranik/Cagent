@@ -99,3 +99,60 @@ class TestSTCPEndpoints:
         )
         assert response.status_code == 404
         assert "STCP not configured" in response.json()["detail"]
+
+    # ── tunnel-config (self-bootstrapping) ──────────────────────────────────
+
+    def test_tunnel_config_creates_new(self, client, auth_headers):
+        """tunnel-config should create a new secret when none exists."""
+        agent_headers = self._create_agent_token(client, auth_headers, "tunnel-new-agent")
+
+        response = client.post(
+            "/api/v1/agent/tunnel-config",
+            headers=agent_headers,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["agent_id"] == "tunnel-new-agent"
+        assert data["proxy_name"] == "tunnel-new-agent-ssh"
+        assert len(data["secret_key"]) > 20
+
+    def test_tunnel_config_idempotent(self, client, auth_headers):
+        """tunnel-config should return the same secret on repeated calls."""
+        agent_headers = self._create_agent_token(client, auth_headers, "tunnel-idem-agent")
+
+        resp1 = client.post("/api/v1/agent/tunnel-config", headers=agent_headers)
+        resp2 = client.post("/api/v1/agent/tunnel-config", headers=agent_headers)
+
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+        assert resp1.json()["secret_key"] == resp2.json()["secret_key"]
+        assert resp1.json()["proxy_name"] == resp2.json()["proxy_name"]
+
+    def test_tunnel_config_rejects_admin(self, client, auth_headers):
+        """tunnel-config should reject admin tokens (agent only)."""
+        response = client.post(
+            "/api/v1/agent/tunnel-config",
+            headers=auth_headers,
+        )
+        assert response.status_code == 403
+
+    def test_tunnel_config_preserves_admin_secret(self, client, auth_headers):
+        """tunnel-config should return the secret created by admin endpoint."""
+        self._provision_agent(client, auth_headers, "tunnel-admin-agent")
+
+        # Admin generates secret via the admin endpoint
+        admin_resp = client.post(
+            "/api/v1/agents/tunnel-admin-agent/stcp-secret",
+            headers=auth_headers,
+        )
+        assert admin_resp.status_code == 200
+        admin_secret = admin_resp.json()["secret_key"]
+
+        # Agent calls tunnel-config — should get the same secret (not overwrite)
+        agent_headers = self._create_agent_token(client, auth_headers, "tunnel-admin-agent")
+        tunnel_resp = client.post(
+            "/api/v1/agent/tunnel-config",
+            headers=agent_headers,
+        )
+        assert tunnel_resp.status_code == 200
+        assert tunnel_resp.json()["secret_key"] == admin_secret

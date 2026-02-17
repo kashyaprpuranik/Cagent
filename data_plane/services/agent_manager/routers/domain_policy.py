@@ -71,9 +71,16 @@ def _build_standalone_policy(domain: str) -> dict:
 
     domain_lower = domain.lower()
 
-    # Find matching domain entry (exact or wildcard)
+    # For devbox.local domains, resolve by alias name instead of domain
+    alias_name = _resolve_devbox_alias(domain_lower)
+
+    # Find matching domain entry (alias, exact, or wildcard)
     matched_entry = None
     for entry in domains:
+        # Alias match: echo.devbox.local → entry with alias "echo"
+        if alias_name and entry.get("alias", "").lower() == alias_name:
+            matched_entry = entry
+            break
         entry_domain = entry.get("domain", "").lower()
         if entry_domain == domain_lower:
             matched_entry = entry
@@ -122,10 +129,24 @@ def _build_standalone_policy(domain: str) -> dict:
     return response
 
 
+def _is_devbox_local(domain: str) -> bool:
+    """Check if domain is a *.devbox.local alias."""
+    return domain.endswith(".devbox.local")
+
+
+def _resolve_devbox_alias(domain: str) -> str | None:
+    """Extract alias name from X.devbox.local → X."""
+    if not _is_devbox_local(domain):
+        return None
+    return domain.removesuffix(".devbox.local")
+
+
 @router.get("/api/v1/domain-policies/for-domain")
 async def get_domain_policy(domain: str = Query(..., min_length=1)):
     """Get domain policy for Lua filter.
 
+    devbox.local domains: always resolve locally from cagent.yaml
+      (CP doesn't know about devbox.local aliases).
     Connected mode: proxy to control plane (cached 5 min).
     Standalone mode: build from cagent.yaml.
     """
@@ -135,6 +156,14 @@ async def get_domain_policy(domain: str = Query(..., min_length=1)):
     cached = _cache_get(domain_lower)
     if cached is not None:
         return cached
+
+    # devbox.local aliases are always resolved locally — the CP doesn't
+    # know about them since they're a data-plane convenience for HTTP
+    # credential injection.
+    if _is_devbox_local(domain_lower):
+        policy = _build_standalone_policy(domain_lower)
+        _cache_set(domain_lower, policy)
+        return policy
 
     if DATAPLANE_MODE == "connected" and CONTROL_PLANE_URL and CONTROL_PLANE_TOKEN:
         # Forward to control plane

@@ -331,6 +331,40 @@ class TestLogging:
         combined = result.stdout + result.stderr
         assert len(combined.strip()) > 0, "No log output from http-proxy"
 
+    def test_logs_reach_file_backup(self, data_plane_running):
+        """Logs should be written to the file backup sink.
+
+        Generates a proxy request with a unique marker, waits for Vector
+        to flush, then checks the backup file inside the log-shipper
+        container for the marker.
+        """
+        marker = f"logtest-{int(time.time())}"
+
+        # Generate traffic through the proxy with a unique path
+        exec_in_agent(
+            f"curl -s -o /dev/null -x http://10.200.1.10:8443 "
+            f"http://pypi.org/{marker} || true"
+        )
+
+        # Poll the file backup volume for the marker (up to 30s)
+        deadline = time.time() + 30
+        found = False
+        while time.time() < deadline:
+            result = subprocess.run(
+                ["docker", "exec", "log-shipper",
+                 "sh", "-c", f"grep -r '{marker}' /var/log/vector/backup/ 2>/dev/null"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if marker in result.stdout:
+                found = True
+                break
+            time.sleep(2)
+
+        assert found, (
+            f"Marker '{marker}' never appeared in log-shipper file backup "
+            f"within 30s. Vector may not be flushing to disk."
+        )
+
 
 @pytest.mark.e2e
 class TestAgentSecurityHardening:

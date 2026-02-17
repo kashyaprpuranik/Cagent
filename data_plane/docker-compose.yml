@@ -332,6 +332,7 @@ services:
 
     volumes:
       - ./configs/vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./configs/vector/sinks/${DATAPLANE_MODE:-standalone}.yaml:/etc/vector/sinks.yaml:ro
       - agent-logs:/var/log/agent:ro
       - log-shipper-data:/var/lib/vector
       - log-shipper-backup:/var/log/vector
@@ -341,12 +342,12 @@ services:
       - /var/log/runsc:/var/log/runsc:ro
 
     environment:
-      # Control plane API (CP-mediated log ingestion)
+      # Control plane API (used by connected sinks config)
       - CONTROL_PLANE_URL=${CONTROL_PLANE_URL}
       - CONTROL_PLANE_TOKEN=${CONTROL_PLANE_TOKEN}
       - ENVIRONMENT=${ENVIRONMENT:-development}
 
-    command: ["--config", "/etc/vector/vector.yaml"]
+    command: ["--config", "/etc/vector/vector.yaml", "--config", "/etc/vector/sinks.yaml"]
 
     # Only on infra-net - can reach control plane
     networks:

@@ -1,0 +1,66 @@
+# =============================================================================
+# Vector Sinks - Standalone Mode
+# Local file logging by default. Uncomment an alternative sink below to
+# ship logs to S3, Elasticsearch, or another destination.
+#
+# Usage:
+#   docker compose --profile dev --profile auditing up -d
+# =============================================================================
+
+sinks:
+  # ---------------------------------------------------------------------------
+  # Local file (default)
+  # Logs are persisted in the log-shipper-backup volume.
+  # ---------------------------------------------------------------------------
+  file_backup:
+    type: file
+    inputs:
+      - parse_docker
+      - parse_gvisor
+      - parse_agent_app
+    path: /var/log/vector/backup/%Y-%m-%d.log
+    encoding:
+      codec: json
+
+  # ---------------------------------------------------------------------------
+  # Amazon S3
+  # Writes NDJSON logs to S3, partitioned by date.
+  # Add AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to the log-shipper
+  # environment in docker-compose.yml, or use an IAM instance role.
+  # ---------------------------------------------------------------------------
+  # s3_logs:
+  #   type: aws_s3
+  #   inputs:
+  #     - parse_docker
+  #     - parse_gvisor
+  #     - parse_agent_app
+  #   bucket: my-cagent-logs
+  #   region: us-east-1
+  #   key_prefix: "cagent/logs/%Y/%m/%d/"
+  #   encoding:
+  #     codec: json
+  #   compression: gzip
+  #   batch:
+  #     max_bytes: 10485760   # 10 MB
+  #     timeout_secs: 300     # flush every 5 min
+
+  # ---------------------------------------------------------------------------
+  # Elasticsearch / OpenSearch
+  # For auth, add: auth.strategy = "basic", auth.user, auth.password
+  # ---------------------------------------------------------------------------
+  # elasticsearch_logs:
+  #   type: elasticsearch
+  #   inputs:
+  #     - parse_docker
+  #     - parse_gvisor
+  #     - parse_agent_app
+  #   endpoints:
+  #     - https://localhost:9200
+  #   bulk:
+  #     index: "cagent-logs-%Y-%m-%d"
+  #   encoding:
+  #     codec: json
+  #   compression: gzip
+  #   batch:
+  #     max_events: 500
+  #     timeout_secs: 10

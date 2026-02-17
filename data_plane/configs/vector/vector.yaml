@@ -1,7 +1,9 @@
 # =============================================================================
 # Vector Configuration - Data Plane Log Collection
 # Collects from: Docker containers, gVisor audit logs, agent app logs
-# Ships to: Control Plane API (CP-mediated log ingestion)
+#
+# Sources and transforms only. Sinks are in a separate file selected by
+# DATAPLANE_MODE (see configs/vector/sinks/).
 # =============================================================================
 
 data_dir: /var/lib/vector
@@ -154,73 +156,3 @@ transforms:
       } else {
         .level = "info"
       }
-
-  # Format events for CP log ingestion API (POST /api/v1/logs/ingest)
-  format_for_cp:
-    type: remap
-    inputs:
-      - parse_docker
-      - parse_gvisor
-      - parse_agent_app
-    source: |
-      ts = .timestamp
-      msg = to_string!(.message)
-      src = to_string(.source) ?? "unknown"
-      lvl = to_string(.level) ?? "info"
-
-      extra = {}
-      if exists(.log_type) { extra.log_type = .log_type }
-      if exists(.hostname) { extra.hostname = .hostname }
-      if exists(.environment) { extra.environment = .environment }
-      if exists(.method) { extra.method = .method }
-      if exists(.path) { extra.path = .path }
-      if exists(.upstream_host) { extra.upstream_host = .upstream_host }
-      if exists(.response_code) { extra.response_code = .response_code }
-      if exists(.duration_ms) { extra.duration_ms = .duration_ms }
-      if exists(.bytes_sent) { extra.bytes_sent = .bytes_sent }
-      if exists(.bytes_received) { extra.bytes_received = .bytes_received }
-      if exists(.request_id) { extra.request_id = .request_id }
-      if exists(.syscall) { extra.syscall = .syscall }
-      if exists(.syscall_result) { extra.syscall_result = .syscall_result }
-      if exists(.container_name) { extra.container_name = .container_name }
-
-      . = {"logs": [compact({"timestamp": ts, "message": msg, "source": src, "level": lvl, "extra": extra})]}
-
-# =============================================================================
-# SINKS
-# =============================================================================
-sinks:
-  # Primary: Control Plane API (CP-mediated log ingestion)
-  # CP injects agent_id and tenant_id from the bearer token, preventing
-  # a compromised data plane from spoofing identity or tampering with logs.
-  control_plane:
-    type: http
-    inputs:
-      - format_for_cp
-    uri: "${CONTROL_PLANE_URL}/api/v1/logs/ingest"
-    method: post
-    encoding:
-      codec: json
-    auth:
-      strategy: bearer
-      token: "${CONTROL_PLANE_TOKEN}"
-    compression: gzip
-    batch:
-      max_events: ${VECTOR_BATCH_MAX_EVENTS:-200}
-      timeout_secs: ${VECTOR_BATCH_TIMEOUT_SECS:-10}
-    request:
-      headers:
-        Content-Type: application/json
-      rate_limit_num: 500
-      rate_limit_duration_secs: 60
-      retry_initial_backoff_secs: 2
-      retry_max_duration_secs: 30
-
-  # Local file backup (if CP API unreachable)
-  file_backup:
-    type: file
-    inputs:
-      - format_for_cp
-    path: /var/log/vector/backup/%Y-%m-%d.log
-    encoding:
-      codec: json

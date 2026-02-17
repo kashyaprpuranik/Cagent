@@ -211,58 +211,54 @@ docker compose --profile dev --profile admin up -d
 Run with centralized management via the control plane. Ideal for multiple tenants and agents.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                          CONTROL PLANE (control-net)                            │
-│                          (can run on provider/cloud)                            │
-│                                                                                 │
-│   ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────┐                │
-│   │    DB     │  │ Frontend  │  │ Log Store │  │Tunnel Server  │                │
-│   │ (secrets) │  │  (:9080)  │  │  (:5080)  │  │    (:7000)    │                │
-│   └────┬────-─┘  └────┬─-────┘  └────┬─-────┘  └───────┬───────┘                │
-│        │              │              │                 │                        │
-│        ▼              ▼              │                 │                        │
-│  ┌────────────────────────────────┐  │                 │                        │
-│  │     Control Plane API (:8002)  │  │                 │                        │
-│  │                                │  │                 │                        │
-│  │  /api/v1/secrets    Secrets    │  │                 │                        │
-│  │  /api/v1/allowlist  Allowlist  │  │                 │                        │
-│  │  /api/v1/agents     Agent Mgmt │  │                 │                        │
-│  │  /api/v1/terminal   Web Term   │  │                 │                        │
-│  └────────────────────────────────┘  │                 │                        │
-│                ▲                     │                 │                        │
-└────────────────┼─────────────────────┼─────────────────┼────────────────────────┘
-                 │ Heartbeat/Commands  │ Logs            │ STCP Tunnels
-                 │                     │                 │
-┌────────────────┼─────────────────────┼─────────────────┼────────────────────────┐
-│                │          DATA PLANE │                 │                        │
-|                |                     |                 |                        |
-│             (can run on client laptop or server or provider servers)            │
-│                │                     │                 ▼                        │
-│  ┌─────────────┴────────-───┐                   ┌─────────────────┐            │
-│  │      Agent Manager       │                   │ Tunnel Client   │            │
-│  │ polls CP, syncs configs  │                   │ (STCP to CP)    │            │
-│  │ ships logs to CP         │                   └────────-┬───────┘            │
-│  └──────────────────────────┘                             │                    │
-│                                                            │                    │
-│  ┌─────────────────────────────────────────────────────────┼──────────────────┐ │
-│  │                        agent-net (isolated)             │                  │ │
-│  │  ┌──────────────────────────────────────────────────────┼────────────────┐ │ │
-│  │  │                     Agent Container                  │                │ │ │
-│  │  │  • Isolated network (no direct internet access)      │                │ │ │
-│  │  │  • All HTTP(S) via HTTP proxy (allowlist enforced)  SSH:22            │ │ │
-│  │  │  • DNS via DNS filter (allowlist enforced)           │                │ │ │
-│  │  └──────────────────────────────────────────────────────┼────────────────┘ │ │
-│  │              │                           │              │                  │ │
-│  │              ▼                           ▼              │                  │ │
-│  │       ┌─────────────┐             ┌─────────────┐       │                  │ │
-│  │       │ HTTP Proxy  │             │ DNS Filter  │       │                  │ │
-│  │       │  (+ creds)  │             │ (allowlist) │       │                  │ │
-│  │       └─────────────┘             └─────────────┘       │                  │ │
-│  └─────────────────────────────────────────────────────────┼──────────────────┘ │
-└────────────────────────────────────────────────────────────┼────────────────────┘
-                                                             │
-                                              Web Terminal ──┘
-                                              (via Admin UI)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       CONTROL PLANE (control-net)                           │
+│                       (can run on provider/cloud)                           │
+│                                                                             │
+│   ┌───────────┐  ┌───────────┐  ┌───────────┐                              │
+│   │    DB     │  │ Frontend  │  │ Log Store │                              │
+│   │ (secrets) │  │  (:9080)  │  │  (:5080)  │                              │
+│   └────┬──────┘  └────┬──────┘  └────┬──────┘                              │
+│        │              │              │                                      │
+│        ▼              ▼              │                                      │
+│  ┌────────────────────────────────┐  │                                      │
+│  │     Control Plane API (:8002)  ├──┘                                      │
+│  │                                │                                         │
+│  │  /api/v1/secrets    Secrets    │                                         │
+│  │  /api/v1/allowlist  Allowlist  │                                         │
+│  │  /api/v1/agents     Agent Mgmt │                                         │
+│  └────────────────────────────────┘                                         │
+│                ▲                                                            │
+└────────────────┼────────────────────────────────────────────────────────────┘
+                 │ Heartbeat, Commands, Logs
+                 │
+┌────────────────┼────────────────────────────────────────────────────────────┐
+│                │                     DATA PLANE                             │
+│                │                                                            │
+│             (can run on client laptop or server or provider servers)        │
+│                │                                                            │
+│  ┌─────────────┴────────────┐                                              │
+│  │      Agent Manager       │                                              │
+│  │ polls CP, syncs configs  │                                              │
+│  │ ships logs to CP         │                                              │
+│  └──────────────────────────┘                                              │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │                        agent-net (isolated)                             ││
+│  │  ┌───────────────────────────────────────────────────────────────────┐  ││
+│  │  │                     Agent Container                               │  ││
+│  │  │  • Isolated network (no direct internet access)                   │  ││
+│  │  │  • All HTTP(S) via HTTP proxy (allowlist enforced)                │  ││
+│  │  │  • DNS via DNS filter (allowlist enforced)                        │  ││
+│  │  └───────────────────────────────────────────────────────────────────┘  ││
+│  │              │                           │                              ││
+│  │              ▼                           ▼                              ││
+│  │       ┌─────────────┐             ┌─────────────┐                      ││
+│  │       │ HTTP Proxy  │             │ DNS Filter  │                      ││
+│  │       │  (+ creds)  │             │ (allowlist) │                      ││
+│  │       └─────────────┘             └─────────────┘                      ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **1. Start Control Plane**
@@ -311,7 +307,7 @@ docker compose --profile dev up -d
 |--------|------------|-------------------|
 | **Web Terminal** | http://<local-admin-ui>:8080 → Terminal | N/A (use SSH) |
 | **Docker exec** | `docker exec -it agent bash` | N/A (use SSH) |
-| **SSH** | Configure via Local Admin UI | Configure via CP API |
+| **SSH** | Configure via Local Admin UI | Direct SSH (port 2222) |
 
 The web terminal is available in the local admin UI. See [data_plane/README.md](data_plane/README.md#ssh-access) for SSH access options.
 

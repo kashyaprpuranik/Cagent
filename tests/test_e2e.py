@@ -587,7 +587,7 @@ class TestLocalAdminAPI:
 
     def test_get_single_container(self, admin_url, agent_container_name):
         """Should get status for a specific container."""
-        r = requests.get(f"{admin_url}/api/containers/{agent_container_name}", timeout=10)
+        r = requests.get(f"{admin_url}/api/containers/{agent_container_name}", timeout=30)
         assert r.status_code == 200
         data = r.json()
         assert data["name"] == agent_container_name

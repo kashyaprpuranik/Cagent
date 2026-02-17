@@ -1,13 +1,22 @@
 # Ignore everything by default
 *
 
-# Allow workspace plumbing
+# Allow workspace plumbing (agent-manager frontend build)
 !package.json
 !package-lock.json
 
 # Allow agent manager (includes frontend source)
 !services/agent_manager/
 !services/agent_manager/**
+
+# Allow agent container files
+!agent.Dockerfile
+!agent_entrypoint.sh
+!entrypoint.sh
+!configs/
+!configs/**
+!scripts/
+!scripts/**
 
 # Re-exclude node_modules and build artifacts everywhere
 **/node_modules

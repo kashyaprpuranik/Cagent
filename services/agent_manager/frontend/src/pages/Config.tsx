@@ -10,7 +10,6 @@ import {
   Trash2,
   Edit2,
   Globe,
-  Settings,
   Code,
   Shield,
   Clock,
@@ -601,7 +600,7 @@ function EmailAccountModal({
   );
 }
 
-// Settings Editor
+// Runtime Settings Editor
 function SettingsEditor({
   config,
   onChange,
@@ -613,112 +612,6 @@ function SettingsEditor({
 }) {
   return (
     <div className="space-y-6">
-      {/* DNS Settings */}
-      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-          <Globe className="w-5 h-5 text-blue-400" />
-          DNS Settings
-        </h3>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Upstream DNS Servers</label>
-            <input
-              type="text"
-              value={config.dns?.upstream?.join(', ') || '8.8.8.8, 8.8.4.4'}
-              onChange={(e) =>
-                onChange({
-                  ...config,
-                  dns: {
-                    ...config.dns,
-                    upstream: e.target.value.split(',').map((s) => s.trim()),
-                    cache_ttl: config.dns?.cache_ttl || 300,
-                  },
-                })
-              }
-              placeholder="8.8.8.8, 8.8.4.4"
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white disabled:opacity-50"
-              disabled={isReadOnly}
-            />
-            <p className="text-xs text-gray-500 mt-1">Comma-separated list of DNS servers</p>
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Cache TTL (seconds)</label>
-            <input
-              type="number"
-              value={config.dns?.cache_ttl || 300}
-              onChange={(e) =>
-                onChange({
-                  ...config,
-                  dns: {
-                    ...config.dns,
-                    upstream: config.dns?.upstream || ['8.8.8.8', '8.8.4.4'],
-                    cache_ttl: parseInt(e.target.value) || 300,
-                  },
-                })
-              }
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white disabled:opacity-50"
-              disabled={isReadOnly}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Rate Limits */}
-      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-          <Gauge className="w-5 h-5 text-yellow-400" />
-          Default Rate Limits
-        </h3>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Requests per Minute</label>
-            <input
-              type="number"
-              value={config.rate_limits?.default?.requests_per_minute || 120}
-              onChange={(e) =>
-                onChange({
-                  ...config,
-                  rate_limits: {
-                    default: {
-                      requests_per_minute: parseInt(e.target.value) || 120,
-                      burst_size: config.rate_limits?.default?.burst_size || 20,
-                    },
-                  },
-                })
-              }
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white disabled:opacity-50"
-              disabled={isReadOnly}
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Burst Size</label>
-            <input
-              type="number"
-              value={config.rate_limits?.default?.burst_size || 20}
-              onChange={(e) =>
-                onChange({
-                  ...config,
-                  rate_limits: {
-                    default: {
-                      requests_per_minute: config.rate_limits?.default?.requests_per_minute || 120,
-                      burst_size: parseInt(e.target.value) || 20,
-                    },
-                  },
-                })
-              }
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white disabled:opacity-50"
-              disabled={isReadOnly}
-            />
-          </div>
-        </div>
-        <p className="text-xs text-gray-500 mt-2">
-          Applied to domains without specific rate limits
-        </p>
-      </div>
-
       {/* Security */}
       <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
         <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
@@ -753,25 +646,6 @@ function SettingsEditor({
           </p>
         </div>
       </div>
-
-      {/* Mode - hidden in read-only/connected mode */}
-      {!isReadOnly && (
-        <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-          <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-            <Settings className="w-5 h-5 text-gray-400" />
-            Operation Mode
-          </h3>
-
-          <select
-            value={config.mode || 'standalone'}
-            onChange={(e) => onChange({ ...config, mode: e.target.value })}
-            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white"
-          >
-            <option value="standalone">Standalone (local config only)</option>
-            <option value="connected">Connected (sync from control plane)</option>
-          </select>
-        </div>
-      )}
     </div>
   );
 }
@@ -1052,7 +926,7 @@ export default function ConfigPage() {
   const tabs = [
     { id: 'domains' as Tab, label: 'Egress Policies', icon: Globe, count: config.domains?.length },
     ...(emailEnabled ? [{ id: 'email' as Tab, label: 'Email', icon: Mail, count: config.email?.accounts?.length, badge: 'Beta' }] : []),
-    ...(!isReadOnly ? [{ id: 'settings' as Tab, label: 'Settings', icon: Settings }] : []),
+    ...(!isReadOnly ? [{ id: 'settings' as Tab, label: 'Runtime Settings', icon: Shield }] : []),
     { id: 'raw' as Tab, label: 'Raw YAML', icon: Code },
   ];
 

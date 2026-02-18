@@ -143,9 +143,8 @@ RUN if [ "$VARIANT" = "ml" ]; then \
 # AI variant: AI coding CLIs (Claude Code, Gemini, Codex, OpenClaw, Aider, Copilot)
 # =============================================================================
 RUN if [ "$VARIANT" = "ai" ]; then \
-    # Claude Code (native binary)
-    curl -fsSL https://claude.ai/install.sh | bash \
-    && mv /root/.local/bin/claude /usr/local/bin/claude \
+    # Claude Code
+    npm install -g @anthropic-ai/claude-code \
     # Gemini CLI
     && npm install -g @google/gemini-cli \
     # OpenAI Codex CLI

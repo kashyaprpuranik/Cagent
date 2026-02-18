@@ -122,6 +122,8 @@ RUN if [ "$VARIANT" = "dev" ] || [ "$VARIANT" = "ml" ]; then \
 # =============================================================================
 RUN if [ "$VARIANT" = "ml" ]; then \
     pip3 install --no-cache-dir \
+        torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip3 install --no-cache-dir \
         numpy \
         pandas \
         scipy \
@@ -130,7 +132,6 @@ RUN if [ "$VARIANT" = "ml" ]; then \
         seaborn \
         jupyter \
         ipython \
-        torch --index-url https://download.pytorch.org/whl/cpu \
         transformers \
         datasets \
         accelerate \

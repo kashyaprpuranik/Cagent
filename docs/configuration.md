@@ -64,7 +64,7 @@ For connected mode (centralized management via control plane), see the [cagent-c
 | `requests_per_minute` | int | Rate limit (requests per minute) |
 | `burst_size` | int | Rate limit burst allowance |
 | `credential` | object | Credential to inject (`header`, `format`, `value`) |
-| `agent_id` | string | Scope to specific cell (null = tenant-global) |
+| `cell_id` | string | Scope to specific cell (null = tenant-global) |
 
 ### Path Filtering
 

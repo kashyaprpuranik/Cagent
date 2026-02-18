@@ -37,7 +37,7 @@ transforms:
 
 sinks:
   # Control Plane API (CP-mediated log ingestion)
-  # CP injects agent_id and tenant_id from the bearer token, preventing
+  # CP injects cell_id and tenant_id from the bearer token, preventing
   # a compromised data plane from spoofing identity or tampering with logs.
   control_plane:
     type: http

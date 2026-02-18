@@ -58,17 +58,17 @@ while true; do
 done
 
 # ── Parse JSON response ─────────────────────────────────────────────────────
-# Response: {"agent_id":"...","secret_key":"...","proxy_name":"...","message":"..."}
+# Response: {"cell_id":"...","secret_key":"...","proxy_name":"...","message":"..."}
 # token_urlsafe produces only [A-Za-z0-9_-] so grep/cut is safe here.
 
 PROXY_NAME=$(echo "$RESPONSE" | grep -o '"proxy_name"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
 SECRET_KEY=$(echo "$RESPONSE" | grep -o '"secret_key"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
-AGENT_ID=$(echo "$RESPONSE" | grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+CELL_ID=$(echo "$RESPONSE" | grep -o '"cell_id"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
 
 [ -z "$PROXY_NAME" ] && die "Failed to parse proxy_name from response"
 [ -z "$SECRET_KEY" ] && die "Failed to parse secret_key from response"
 
-log "Tunnel config received for agent=$AGENT_ID proxy=$PROXY_NAME"
+log "Tunnel config received for cell=$CELL_ID proxy=$PROXY_NAME"
 
 # ── Write frpc.toml ─────────────────────────────────────────────────────────
 

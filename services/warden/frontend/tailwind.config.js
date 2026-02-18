@@ -7,6 +7,8 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
     "./node_modules/@cagent/ui/src/**/*.{js,ts,jsx,tsx}",
+    "../../node_modules/@cagent/ui/src/**/*.{js,ts,jsx,tsx}",
+    "../../../node_modules/@cagent/ui/src/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
     extend: {

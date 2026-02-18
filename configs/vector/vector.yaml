@@ -1,6 +1,6 @@
 # =============================================================================
 # Vector Configuration - Data Plane Log Collection
-# Collects from: Docker containers, gVisor audit logs, agent app logs
+# Collects from: Docker containers, gVisor audit logs, cell app logs
 #
 # Sources and transforms only. Sinks are in a separate file selected by
 # DATAPLANE_MODE (see configs/vector/sinks/).
@@ -16,7 +16,7 @@ api:
 # SOURCES
 # =============================================================================
 sources:
-  # Docker container logs (agent(s), envoy, coredns, agent-manager, email-proxy)
+  # Docker container logs (cell(s), envoy, coredns, warden, email-proxy)
   # Vector's docker_logs source passes include_labels to the Docker API for
   # container discovery.  All monitored containers carry "cagent.log-collect=true".
   # NOTE: Docker API ANDs multiple label filters, so only ONE label is used here.
@@ -35,11 +35,11 @@ sources:
     fingerprint:
       strategy: device_and_inode
 
-  # Agent application logs (custom app logging)
-  agent_app_logs:
+  # Cell application logs (custom app logging)
+  cell_app_logs:
     type: file
     include:
-      - /var/log/agent/**/*.log
+      - /var/log/cell/**/*.log
     read_from: end
 
 # =============================================================================
@@ -58,10 +58,10 @@ transforms:
         "envoy"
       } else if contains(container, "email-proxy") {
         "email-proxy"
-      } else if contains(container, "agent-manager") {
-        "agent-manager"
-      } else if contains(container, "agent") {
-        "agent"
+      } else if contains(container, "warden") {
+        "warden"
+      } else if contains(container, "cell") && !contains(container, "warden") {
+        "cell"
       } else if contains(container, "dns") {
         "coredns"
       } else {
@@ -138,13 +138,13 @@ transforms:
         .level = "info"
       }
 
-  # Parse agent app logs
-  parse_agent_app:
+  # Parse cell app logs
+  parse_cell_app:
     type: remap
     inputs:
-      - agent_app_logs
+      - cell_app_logs
     source: |
-      .source = "agent"
+      .source = "cell"
       .log_type = "app"
       .hostname = get_env_var("HOSTNAME") ?? "unknown"
       .environment = get_env_var("ENVIRONMENT") ?? "development"

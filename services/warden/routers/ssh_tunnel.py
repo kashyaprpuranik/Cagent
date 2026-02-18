@@ -82,7 +82,7 @@ def get_tunnel_client_status() -> dict:
 
 def _fetch_tunnel_config(cp_url: str, token: str) -> dict:
     """Call CP tunnel-config endpoint to get STCP credentials."""
-    url = f"{cp_url}/api/v1/agent/tunnel-config"
+    url = f"{cp_url}/api/v1/cell/tunnel-config"
     req = Request(url, data=b"", method="POST", headers={
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -104,10 +104,10 @@ def _derive_frp_server(cp_url: str) -> str:
 
 
 # =========================================================================
-# Tunnel-config proxy (Phase 3: FRP talks to agent-manager instead of CP)
+# Tunnel-config proxy (Phase 3: FRP talks to warden instead of CP)
 # =========================================================================
 
-@proxy_router.post("/api/v1/agent/tunnel-config")
+@proxy_router.post("/api/v1/cell/tunnel-config")
 async def proxy_tunnel_config():
     """Proxy tunnel-config request to control plane.
 
@@ -190,9 +190,9 @@ def create_tunnel_client_container(env_vars: dict):
     """Create the tunnel client container using Docker SDK."""
     # Get or create networks
     try:
-        agent_net = docker_client.networks.get("cagent-agent-net")
+        agent_net = docker_client.networks.get("cagent-cell-net")
     except docker.errors.NotFound:
-        raise HTTPException(500, "Network cagent-agent-net not found. Is the data plane running?")
+        raise HTTPException(500, "Network cagent-cell-net not found. Is the data plane running?")
 
     try:
         infra_net = docker_client.networks.get("cagent-infra-net")
@@ -325,6 +325,6 @@ bindPort = 2222
         "frp_server": frp_server,
         "frp_port": frp_port,
         "secret_key": secret_key,
-        "ssh_command": "ssh -p 2222 agent@127.0.0.1  # After starting visitor",
+        "ssh_command": "ssh -p 2222 cell@127.0.0.1  # After starting visitor",
         "visitor_config": visitor_config,
     }

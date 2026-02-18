@@ -10,7 +10,7 @@ transforms:
     inputs:
       - parse_docker
       - parse_gvisor
-      - parse_agent_app
+      - parse_cell_app
     source: |
       ts = .timestamp
       msg = to_string!(.message)

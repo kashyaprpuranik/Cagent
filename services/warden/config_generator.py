@@ -420,7 +420,7 @@ class ConfigGenerator:
     def _build_control_plane_cluster(self) -> dict:
         """Build cluster for the domain policy API.
 
-        Points to agent-manager on infra-net (Docker DNS) so the Envoy Lua
+        Points to warden on infra-net (Docker DNS) so the Envoy Lua
         filter can reach the domain-policy endpoint locally without needing
         direct access to the control plane.
 
@@ -439,7 +439,7 @@ class ConfigGenerator:
                         'endpoint': {
                             'address': {
                                 'socket_address': {
-                                    'address': 'agent-manager',
+                                    'address': 'warden',
                                     'port_value': 8080
                                 }
                             }
@@ -533,17 +533,17 @@ class ConfigGenerator:
     def generate_lua_filter(self) -> str:
         """Generate Lua filter code.
 
-        Produces a simplified filter that talks to agent-manager (local,
-        no auth) for domain policy lookups.  Agent-manager handles both
+        Produces a simplified filter that talks to warden (local,
+        no auth) for domain policy lookups.  Warden handles both
         standalone and connected mode internally.
         """
         lines = [
             '-- =======================================================================',
             '-- Auto-generated Lua filter from cagent.yaml',
             f'-- Generated: {datetime.utcnow().isoformat()}Z',
-            '-- DO NOT EDIT - changes will be overwritten by agent-manager',
+            '-- DO NOT EDIT - changes will be overwritten by warden',
             '-- =======================================================================',
-            '-- Talks to agent-manager (local, no auth) for domain policy lookups.',
+            '-- Talks to warden (local, no auth) for domain policy lookups.',
             '',
             '-- Configuration',
             'local CACHE_TTL_SECONDS = 300',
@@ -622,7 +622,7 @@ class ConfigGenerator:
             'end',
             '',
             '-- =======================================================================',
-            '-- Domain Policy (talks to local agent-manager)',
+            '-- Domain Policy (talks to local warden)',
             '-- =======================================================================',
             '',
             'function get_domain_policy(request_handle, domain)',
@@ -637,7 +637,7 @@ class ConfigGenerator:
             '      "control_plane_api",',
             '      {[":method"] = "GET",',
             '       [":path"] = "/api/v1/domain-policies/for-domain?domain=" .. url_encode(host_clean),',
-            '       [":authority"] = "agent-manager"},',
+            '       [":authority"] = "warden"},',
             '      "", 5000, false)',
             '    if body and string.len(body) > 0 then',
             '      mark_cp_success()',

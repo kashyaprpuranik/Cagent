@@ -2,11 +2,11 @@
 set -e
 
 # =============================================================================
-# Agent Container Entrypoint
+# Cell Container Entrypoint
 # Starts SSH server with persistent tmux sessions
 # =============================================================================
 
-USER_NAME="${USER_NAME:-agent}"
+USER_NAME="${USER_NAME:-cell}"
 USER_HOME="/home/$USER_NAME"
 WORKSPACE="/workspace"
 
@@ -81,7 +81,7 @@ recover_tmux_sessions() {
 }
 
 # Main
-echo "=== AI Agent Container Starting ==="
+echo "=== AI Cell Container Starting ==="
 echo "Variant: ${VARIANT:-lean}"
 echo "User: $USER_NAME"
 
@@ -96,7 +96,7 @@ echo "Starting SSH server..."
 
 # Keep container running
 echo ""
-echo "Agent ready!"
+echo "Cell ready!"
 echo "  - SSH: port 22"
 echo "  - Sessions: auto-attach to tmux on login"
 echo "  - Workspace: $WORKSPACE (persistent)"

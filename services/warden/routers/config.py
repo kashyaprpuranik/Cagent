@@ -89,7 +89,7 @@ async def reload_config():
     """Trigger config reload (regenerate CoreDNS + Envoy configs)."""
     if READ_ONLY:
         raise HTTPException(403, "Config reload is disabled in connected mode (managed by control plane)")
-    # This would trigger agent-manager to reload
+    # This would trigger warden to reload
     # For now, we restart the containers
     results = {}
 

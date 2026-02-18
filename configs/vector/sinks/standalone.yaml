@@ -17,7 +17,7 @@ sinks:
     inputs:
       - parse_docker
       - parse_gvisor
-      - parse_agent_app
+      - parse_cell_app
     path: /var/log/vector/backup/%Y-%m-%d.log
     encoding:
       codec: json

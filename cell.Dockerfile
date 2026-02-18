@@ -1,5 +1,5 @@
 # =============================================================================
-# AI Agent Development Environment
+# AI Cell Development Environment
 # =============================================================================
 #
 # Build variants (use --build-arg VARIANT=<name>):
@@ -8,9 +8,9 @@
 #   ml   - Dev + PyTorch + ML libs (~6GB)
 #
 # Usage:
-#   docker build -f agent.Dockerfile --build-arg VARIANT=lean -t agent:lean .
-#   docker build -f agent.Dockerfile --build-arg VARIANT=dev -t agent:dev .
-#   docker build -f agent.Dockerfile --build-arg VARIANT=ml -t agent:ml .
+#   docker build -f cell.Dockerfile --build-arg VARIANT=lean -t cell:lean .
+#   docker build -f cell.Dockerfile --build-arg VARIANT=dev -t cell:dev .
+#   docker build -f cell.Dockerfile --build-arg VARIANT=ml -t cell:ml .
 #
 # =============================================================================
 
@@ -147,7 +147,7 @@ RUN mkdir -p /var/run/sshd \
 # =============================================================================
 # Create non-root user
 # =============================================================================
-ARG USER_NAME=agent
+ARG USER_NAME=cell
 ARG USER_UID=1000
 ARG USER_GID=1000
 
@@ -171,14 +171,14 @@ WORKDIR /workspace
 # Persistent Sessions (tmux)
 # =============================================================================
 # Tmux configuration
-COPY configs/agent/tmux.conf /etc/tmux.conf
+COPY configs/cell/tmux.conf /etc/tmux.conf
 
 # Auto-attach to tmux on SSH login
-COPY configs/agent/profile.d/tmux_session.sh /etc/profile.d/99-tmux-session.sh
+COPY configs/cell/profile.d/tmux_session.sh /etc/profile.d/99-tmux-session.sh
 RUN chmod +x /etc/profile.d/99-tmux-session.sh
 
 # Session management helper
-COPY configs/agent/bin/session /usr/local/bin/session
+COPY configs/cell/bin/session /usr/local/bin/session
 RUN chmod +x /usr/local/bin/session
 
 # =============================================================================
@@ -189,7 +189,7 @@ COPY scripts/seed_traffic.py /seed_traffic.py
 # =============================================================================
 # Entrypoint
 # =============================================================================
-COPY agent_entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY cell_entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 EXPOSE 22

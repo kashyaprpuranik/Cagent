@@ -12,10 +12,10 @@ The control plane (centralized multi-tenant management) lives in a separate priv
 
 This repo contains the **data plane** — the secure agent execution environment:
 
-- **Agent Container**: Network-isolated sandbox where AI agents run
+- **Cell**: Network-isolated sandbox where AI agents run
 - **HTTP Proxy** (Envoy): Egress gateway with domain allowlist, rate limiting, path filtering, and credential injection
 - **DNS Filter** (CoreDNS): Domain allowlist enforcement at DNS level
-- **Agent Manager**: Config sync daemon + local admin UI (FastAPI + React)
+- **Warden**: Config sync daemon + local admin UI (FastAPI + React)
 - **Log Shipper** (Vector): Log collection with mode-specific sinks (file, S3, Elasticsearch, or CP)
 - **Email Proxy**: IMAP/SMTP proxy with per-recipient policies (beta)
 
@@ -35,18 +35,18 @@ This repo contains the **data plane** — the secure agent execution environment
 
 ```
 .
-├── docker-compose.yml              # DP services (agent, envoy, coredns, vector, agent-manager, email-proxy)
-├── agent.Dockerfile                # Agent container image
+├── docker-compose.yml              # DP services (cell, envoy, coredns, vector, warden, email-proxy)
+├── cell.Dockerfile                 # Cell container image
 ├── configs/
 │   ├── cagent.yaml                 # Unified config (source of truth for DNS + proxy)
 │   ├── coredns/Corefile            # DNS filter config (generated from cagent.yaml)
 │   ├── envoy/                      # HTTP proxy config (generated from cagent.yaml)
 │   ├── vector/                     # Log collection (sources/transforms + mode-specific sinks)
-│   ├── seccomp/                    # Seccomp profile for agent container
+│   ├── seccomp/                    # Seccomp profile for cell container
 │   └── gvisor/runsc.toml           # gVisor runtime config
 ├── services/
-│   ├── agent_manager/              # Config sync, admin UI, domain policy API
-│   │   └── frontend/               # React admin UI (built into agent-manager image)
+│   ├── warden/               # Config sync, admin UI, domain policy API
+│   │   └── frontend/               # React admin UI (built into warden image)
 │   └── email_proxy/                # Email egress control (beta)
 ├── tests/                          # Unit and E2E tests
 ├── scripts/                        # Utility scripts (seed_traffic.py)
@@ -59,7 +59,7 @@ This repo contains the **data plane** — the secure agent execution environment
 
 | Layer | Technology |
 |-------|-----------|
-| Agent Manager | Python, FastAPI |
+| Warden | Python, FastAPI |
 | Frontend | React 18, TypeScript, Vite, TailwindCSS, TanStack React Query |
 | Terminal | xterm.js (local admin WebSocket terminal), direct SSH (port 2222) |
 | Proxy | Envoy (HTTP egress gateway with credential injection) |
@@ -76,7 +76,7 @@ This repo contains the **data plane** — the secure agent execution environment
 # Standalone with admin UI (default)
 ./dev_up.sh
 
-# Minimal (no agent-manager, static config)
+# Minimal (no warden, static config)
 ./dev_up.sh --minimal
 
 # Stop everything
@@ -105,20 +105,20 @@ pytest tests/test_e2e.py -v                     # E2E (requires Docker)
 
 ```bash
 # Rebuild and restart a single service
-docker compose build agent-manager && docker compose up -d agent-manager
+docker compose build warden && docker compose up -d warden
 
 # View logs
-docker compose logs -f agent-manager
+docker compose logs -f warden
 
-# Enter agent container shell
-docker exec -it agent bash
+# Enter cell container shell
+docker exec -it cell bash
 ```
 
 ### Frontend Development
 
 ```bash
-# Admin UI (built into agent-manager)
-cd services/agent_manager/frontend && npm install && npm run dev
+# Admin UI (built into warden)
+cd services/warden/frontend && npm install && npm run dev
 
 # Lint (fails on any warning)
 npm run lint
@@ -126,7 +126,7 @@ npm run lint
 
 ## Key Conventions
 
-### Agent Manager
+### Warden
 
 - **Framework**: FastAPI with background polling loop (main_loop in separate thread)
 - **Config generation**: `config_generator.py` reads `cagent.yaml` and generates CoreDNS Corefile + Envoy config
@@ -151,37 +151,37 @@ npm run lint
 
 ### Docker / Infrastructure
 
-- **Networks**: `agent-net` (10.200.1.0/24, internal, no external access) and `infra-net` (10.200.2.0/24, can reach external). IPv6 disabled to prevent bypass
-- **Static IPs**: dns-filter=10.200.1.5, http-proxy=10.200.1.10, agent=10.200.1.20
-- **Profiles**: `dev` (runc), `standard` (gVisor), `admin` (admin UI via agent-manager), `managed` (agent-manager without UI), `auditing` (log shipping), `ssh` (FRP tunnel), `email` (email proxy - beta)
-- **Config generation**: `cagent.yaml` is the source of truth. Agent manager generates CoreDNS Corefile and Envoy config from it
+- **Networks**: `cell-net` (10.200.1.0/24, internal, no external access) and `infra-net` (10.200.2.0/24, can reach external). IPv6 disabled to prevent bypass
+- **Static IPs**: dns-filter=10.200.1.5, http-proxy=10.200.1.10, cell=10.200.1.20
+- **Profiles**: `dev` (runc), `standard` (gVisor), `admin` (admin UI via warden), `managed` (warden without UI), `auditing` (log shipping), `ssh` (FRP tunnel), `email` (email proxy - beta)
+- **Config generation**: `cagent.yaml` is the source of truth. Warden generates CoreDNS Corefile and Envoy config from it
 - **Security layers**: Seccomp profile blocks raw sockets, gVisor intercepts syscalls, Envoy enforces domain allowlist/rate limits/path filtering, CoreDNS blocks unauthorized DNS
 - **Vector sinks**: `configs/vector/sinks/standalone.yaml` (file backup + optional S3/ES) or `sinks/connected.yaml` (CP API + file backup), selected via `DATAPLANE_MODE` env var
 
 ## Data Flow
 
-1. Agent makes HTTP request via `HTTP_PROXY` (Envoy at 10.200.1.10:8443)
+1. Cell makes HTTP request via `HTTP_PROXY` (Envoy at 10.200.1.10:8443)
 2. Envoy checks domain against allowlist, enforces rate limits and path filtering
 3. Envoy injects credentials (if configured) and forwards request upstream
 4. DNS queries go through CoreDNS (10.200.1.5) which only resolves allowed domains
 5. Vector collects logs from Docker/Envoy/CoreDNS and writes to file (standalone) or ships to CP (connected)
-6. In connected mode, agent-manager polls CP for policy updates and regenerates configs
+6. In connected mode, warden polls CP for policy updates and regenerates configs
 
 ## Important Files
 
 | File | Purpose |
 |------|---------|
 | `configs/cagent.yaml` | Unified data plane config |
-| `services/agent_manager/config_generator.py` | Generates CoreDNS + Envoy configs |
-| `services/agent_manager/main.py` | Agent manager: FastAPI app, polling loop, admin UI |
-| `services/agent_manager/routers/domain_policy.py` | Domain policy API for Envoy Lua filter |
+| `services/warden/config_generator.py` | Generates CoreDNS + Envoy configs |
+| `services/warden/main.py` | Warden: FastAPI app, polling loop, admin UI |
+| `services/warden/routers/domain_policy.py` | Domain policy API for Envoy Lua filter |
 | `docker-compose.yml` | Service definitions |
 | `dev_up.sh` | Dev environment orchestration |
 | `run_tests.sh` | Test runner |
 
 ## Gotchas
 
-- `cagent.yaml` and `Corefile` are modified at runtime by agent-manager; DP E2E tests back up and restore these files
+- `cagent.yaml` and `Corefile` are modified at runtime by warden; DP E2E tests back up and restore these files
 - Frontend lint runs with `--max-warnings 0`; any ESLint warning fails the build
 - E2E tests start/stop Docker containers and require Docker socket access
 - IPv6 is disabled on Docker networks to prevent egress control bypass

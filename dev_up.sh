@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./dev_up.sh                     # Standalone with admin UI (default)
-#   ./dev_up.sh --minimal           # Minimal (no agent-manager, static config)
+#   ./dev_up.sh --minimal           # Minimal (no warden, static config)
 #   ./dev_up.sh --gvisor            # Use gVisor runtime
 #   ./dev_up.sh --ssh               # Include SSH tunnel via FRP
 #   ./dev_up.sh --beta              # Enable beta features (email proxy)
@@ -62,7 +62,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS] [ACTION]"
             echo ""
             echo "Options:"
-            echo "  --minimal       Minimal mode (no agent-manager, static config)"
+            echo "  --minimal       Minimal mode (no warden, static config)"
             echo "  --gvisor        Use gVisor runtime (default: runc)"
             echo "  --ssh           Include SSH tunnel via FRP"
             echo "  --beta          Enable beta features (email proxy)"
@@ -116,25 +116,25 @@ docker compose $profiles build
 echo "Starting services..."
 docker compose $profiles up -d
 
-# Wait for agent container(s)
-echo "Waiting for agent container(s)..."
+# Wait for cell container(s)
+echo "Waiting for cell container(s)..."
 RETRIES=20
-until docker ps --filter "label=cagent.role=agent" -q 2>/dev/null | grep -q .; do
+until docker ps --filter "label=cagent.role=cell" -q 2>/dev/null | grep -q .; do
     RETRIES=$((RETRIES - 1))
     if [ $RETRIES -le 0 ]; then
-        echo "  ERROR: Agent container(s) failed to start"
+        echo "  ERROR: Cell container(s) failed to start"
         docker compose $profiles logs 2>/dev/null | tail -20
         exit 1
     fi
     sleep 2
 done
-echo "  Agent container(s): OK"
+echo "  Cell container(s): OK"
 
 # Wait for HTTP proxy
 echo "Waiting for HTTP proxy..."
-AGENT_CONTAINER=$(docker ps --filter "label=cagent.role=agent" --format "{{.Names}}" | head -1)
+CELL_CONTAINER=$(docker ps --filter "label=cagent.role=cell" --format "{{.Names}}" | head -1)
 RETRIES=15
-until docker exec "$AGENT_CONTAINER" curl -sf -x http://10.200.1.10:8443 --connect-timeout 2 http://api.github.com/ -o /dev/null 2>/dev/null; do
+until docker exec "$CELL_CONTAINER" curl -sf -x http://10.200.1.10:8443 --connect-timeout 2 http://api.github.com/ -o /dev/null 2>/dev/null; do
     RETRIES=$((RETRIES - 1))
     if [ $RETRIES -le 0 ]; then
         echo "  WARNING: HTTP proxy health check timed out (continuing anyway)"
@@ -147,7 +147,7 @@ echo "  HTTP proxy: OK"
 echo ""
 echo "=== Data Plane ready (standalone) ==="
 echo ""
-echo "Agent container: docker exec -it $AGENT_CONTAINER bash"
+echo "Cell container: docker exec -it $CELL_CONTAINER bash"
 if echo "$DP_PROFILES" | grep -q "admin"; then
     echo "Admin UI: http://localhost:${LOCAL_ADMIN_PORT:-8081}"
 fi

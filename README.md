@@ -28,8 +28,8 @@ Cagent assumes the AI agent is **untrusted by default**. The agent may be:
 
 | Principle | Description |
 |-----------|-------------|
-| **Network Isolation** | Agent can only reach Envoy (proxy) and CoreDNS (DNS filter) - no direct internet access |
-| **Credential Hiding** | Agent never sees API keys; credentials injected by proxy at egress |
+| **Network Isolation** | Cell can only reach Envoy (proxy) and CoreDNS (DNS filter) - no direct internet access |
+| **Credential Hiding** | Cell never sees API keys; credentials injected by proxy at egress |
 | **Defense in Depth** | Multiple layers: network, container, optional kernel (gVisor) isolation |
 | **Least Privilege** | Minimal capabilities, read-only filesystem, resource limits |
 | **Audit Everything** | All HTTP requests, DNS queries, and syscalls logged |
@@ -48,14 +48,14 @@ Cagent assumes the AI agent is **untrusted by default**. The agent may be:
 ### Network Security
 | Control | Implementation |
 |---------|----------------|
-| Internal network | `agent-net` marked as `internal: true` (no default gateway) |
-| Protocol restriction | Agent can ONLY reach Envoy (HTTP) and CoreDNS (DNS) |
+| Internal network | `cell-net` marked as `internal: true` (no default gateway) |
+| Protocol restriction | Cell can ONLY reach Envoy (HTTP) and CoreDNS (DNS) |
 | IPv6 disabled | Prevents bypass of IPv4 egress controls |
 | Allowlist enforcement | CoreDNS blocks resolution of non-allowed domains |
 | Egress proxy | All HTTP(S) routed through Envoy |
 | Raw socket blocked | Seccomp profile prevents packet crafting |
 
-**Protocol Smuggling Prevention**: Raw TCP/UDP to external hosts is impossible. The agent can only reach two IPs on the internal network: Envoy (port 8443, HTTP only) and CoreDNS (port 53, DNS only). Seccomp blocks raw socket creation (AF_PACKET), preventing packet crafting.
+**Protocol Smuggling Prevention**: Raw TCP/UDP to external hosts is impossible. The cell can only reach two IPs on the internal network: Envoy (port 8443, HTTP only) and CoreDNS (port 53, DNS only). Seccomp blocks raw socket creation (AF_PACKET), preventing packet crafting.
 
 **Residual Exfiltration Channels**: Small amounts of data could theoretically be exfiltrated via DNS queries or HTTPS traffic to allowlisted domains. Mitigations: DNS tunneling detection (blocks long subdomains) and audit logging.
 
@@ -80,18 +80,18 @@ The `standard` profile uses [gVisor](https://gvisor.dev) to intercept syscalls i
 
 ### Standalone Mode
 
-Run with local configuration - ideal for local use of one agent.
+Run with local configuration - ideal for local use of one cell.
 
 #### Minimal (Static Config)
 
-Lightweight setup with just 3 containers. Edit `cagent.yaml` and run the config generator, or edit raw `coredns/Corefile` and `envoy/envoy.yaml` directly for advanced use. Ideal for simple static domain policies on one agent.
+Lightweight setup with just 3 containers. Edit `cagent.yaml` and run the config generator, or edit raw `coredns/Corefile` and `envoy/envoy.yaml` directly for advanced use. Ideal for simple static domain policies on one cell.
 
 ```
 ┌───────────────────────────────────────────────────────┐
-│                  agent-net (isolated)                  │
+│                  cell-net (isolated)                  │
 │                                                        │
 │    ┌────────────────────────────────────────────┐     │
-│    │              Agent Container                │     │
+│    │                    Cell                      │     │
 │    │  • Isolated network (no direct internet)    │     │
 │    │  • All HTTP(S) via HTTP Proxy                │     │
 │    │  • DNS via DNS Filter                       │     │
@@ -115,23 +115,23 @@ docker compose --profile dev up -d
 
 #### Locally Managed (With Admin UI)
 
-Adds agent-manager (watches `cagent.yaml`) and local admin UI for browser-based management and observability. Ideal for complex and changing domain policies on one agent.
+Adds warden (watches `cagent.yaml`) and local admin UI for browser-based management and observability. Ideal for complex and changing domain policies on one cell.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         DATA PLANE                               │
 │                                                                  │
 │  ┌──────────────────────────────────────────┐                   │
-│  │        Agent Manager (:8081)             │                   │
+│  │        Warden (:8081)              │                   │
 │  │  • Admin UI (config, terminal, logs)     │                   │
 │  │  • Watches cagent.yaml, regenerates      │                   │
 │  │    DNS filter + HTTP proxy configs       │                   │
 │  └──────────────┬───────────────────────────┘                   │
 │                 │                                                │
 │  ┌──────────────┼──────────────────────────────────────────────┐│
-│  │              │          agent-net (isolated)                 ││
+│  │              │          cell-net (isolated)                 ││
 │  │    ┌─────────┴───────────────────────────────────────┐     ││
-│  │    │                 Agent Container                  │     ││
+│  │    │                       Cell                         │     ││
 │  │    └─────────────────────────────────────────────────┘     ││
 │  │                 │                       │                   ││
 │  │          ┌──────┴──────┐         ┌──────┴──────┐           ││
@@ -164,14 +164,14 @@ Adds log collection for standalone deployments. Logs are written to local files 
 │                         DATA PLANE                               │
 │                                                                  │
 │  ┌──────────────────────────┐  ┌──────────────────────────────┐│
-│  │   Agent Manager (:8081)  │  │   Log Shipper               ││
+│  │   Warden (:8081)   │  │   Log Shipper               ││
 │  │   admin UI, config sync  │  │   file (default), S3, or ES ││
 │  └──────────────┬───────────┘  └──────────────────────────────┘│
 │                 │                                                │
 │  ┌──────────────┼──────────────────────────────────────────────┐│
-│  │              │          agent-net (isolated)                 ││
+│  │              │          cell-net (isolated)                 ││
 │  │    ┌─────────┴───────────────────────────────────────┐     ││
-│  │    │                 Agent Container                  │     ││
+│  │    │                       Cell                       │     ││
 │  │    └─────────────────────────────────────────────────┘     ││
 │  │                 │                       │                   ││
 │  │          ┌──────┴──────┐         ┌──────┴──────┐           ││
@@ -195,12 +195,12 @@ docker compose --profile dev --profile admin --profile auditing up -d
 docker compose --profile dev --profile admin --profile auditing --profile email up -d
 ```
 
-**Accessing the Agent**
+**Accessing the Cell**
 
 | Method | How |
 |--------|-----|
 | **Web Terminal** | http://localhost:8081 (admin UI) |
-| **Docker exec** | `docker exec -it agent bash` |
+| **Docker exec** | `docker exec -it cell bash` |
 | **SSH** | Direct SSH to port 2222 (configure via admin UI) |
 
 ## Features
@@ -208,10 +208,10 @@ docker compose --profile dev --profile admin --profile auditing --profile email 
 | Feature | Description |
 |---------|-------------|
 | **Domain Allowlist** | Only approved domains can be accessed (enforced by CoreDNS and Envoy) |
-| **Credential Injection** | API keys injected by proxy, never exposed to agent |
+| **Credential Injection** | API keys injected by proxy, never exposed to cell |
 | **Rate Limiting** | Per-domain rate limits to control API usage |
 | **Traffic Analytics** | Requests/sec, top domains, error rates in log viewer |
-| **Web Terminal** | Browser-based shell access to agents (xterm.js) |
+| **Web Terminal** | Browser-based shell access to cells (xterm.js) |
 | **gVisor Isolation** | Optional kernel-level syscall isolation for defense in depth |
 | **Email Proxy** | Controlled IMAP/SMTP access with per-recipient policies - **beta** |
 
@@ -219,8 +219,8 @@ docker compose --profile dev --profile admin --profile auditing --profile email 
 
 See [docs/configuration.md](docs/configuration.md) for detailed configuration including:
 - Domain policies (allowlist, path filtering, rate limits, egress limits, credentials)
-- Agent management commands
-- Per-agent configuration (agent-specific domain policies)
+- Cell management commands
+- Per-cell configuration (cell-specific domain policies)
 
 ## Documentation
 

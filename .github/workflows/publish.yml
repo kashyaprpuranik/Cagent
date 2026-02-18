@@ -13,7 +13,7 @@ permissions:
   packages: write
 
 jobs:
-  agent:
+  cell:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -30,7 +30,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ${{ env.REGISTRY }}/kashyaprpuranik/cagent-agent
+          images: ${{ env.REGISTRY }}/kashyaprpuranik/cagent-cell
           tags: |
             type=semver,pattern=v{{version}},suffix=-${{ matrix.variant }}
             type=raw,value=latest,suffix=-${{ matrix.variant }}
@@ -38,13 +38,13 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: agent.Dockerfile
+          file: cell.Dockerfile
           build-args: VARIANT=${{ matrix.variant }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  agent-manager:
+  warden:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +58,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ${{ env.REGISTRY }}/kashyaprpuranik/cagent-manager
+          images: ${{ env.REGISTRY }}/kashyaprpuranik/cagent-warden
           tags: |
             type=semver,pattern=v{{version}}
             type=raw,value=latest
@@ -66,7 +66,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: services/agent_manager/Dockerfile
+          file: services/warden/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

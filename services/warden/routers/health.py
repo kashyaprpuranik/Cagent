@@ -6,7 +6,7 @@ from fastapi import APIRouter
 import docker
 
 from constants import (
-    AGENT_CONTAINER_NAME,
+    CELL_CONTAINER_NAME,
     COREDNS_CONTAINER_NAME,
     ENVOY_CONTAINER_NAME,
     FRPC_CONTAINER_NAME,
@@ -108,7 +108,7 @@ async def info():
         "data_plane_dir": DATA_PLANE_DIR,
         "features": sorted(BETA_FEATURES),
         "containers": {
-            "agent": AGENT_CONTAINER_NAME,
+            "cell": CELL_CONTAINER_NAME,
             "dns": COREDNS_CONTAINER_NAME,
             "http_proxy": ENVOY_CONTAINER_NAME,
             "tunnel": FRPC_CONTAINER_NAME

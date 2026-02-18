@@ -1,7 +1,7 @@
 import docker
 from fastapi import APIRouter, HTTPException
 
-from constants import MANAGED_CONTAINERS, READ_ONLY, docker_client, discover_agent_container_names
+from constants import MANAGED_CONTAINERS, READ_ONLY, docker_client, discover_cell_container_names
 from models import ContainerAction
 
 router = APIRouter()
@@ -75,13 +75,13 @@ async def get_container(name: str):
 async def control_container(name: str, action: ContainerAction):
     """Control a container (start/stop/restart).
 
-    Only agent containers may be controlled. Infrastructure containers
-    (dns-filter, http-proxy, agent-manager, etc.) are protected.
+    Only cell containers may be controlled. Infrastructure containers
+    (dns-filter, http-proxy, warden, etc.) are protected.
     """
     if READ_ONLY:
         raise HTTPException(403, "Container control is disabled in connected mode (managed by control plane)")
 
-    allowed = set(discover_agent_container_names())
+    allowed = set(discover_cell_container_names())
     if name not in allowed:
         raise HTTPException(403, f"Cannot {action.action} infrastructure container '{name}'")
 

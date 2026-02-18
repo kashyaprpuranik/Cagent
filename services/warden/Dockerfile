@@ -1,5 +1,5 @@
 # =============================================================================
-# Agent Manager - Unified data plane service
+# Warden - Unified data plane service
 # Multi-stage build: Node (frontend) + Python (backend)
 # =============================================================================
 
@@ -12,16 +12,16 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 
 # Copy frontend package files
-COPY services/agent_manager/frontend/package.json services/agent_manager/frontend/
+COPY services/warden/frontend/package.json services/warden/frontend/
 
 # Install dependencies (workspace-aware)
-RUN npm ci --workspace=services/agent_manager/frontend --include-workspace-root
+RUN npm ci --workspace=services/warden/frontend --include-workspace-root
 
 # Copy frontend source
-COPY services/agent_manager/frontend/ services/agent_manager/frontend/
+COPY services/warden/frontend/ services/warden/frontend/
 
 # Build
-RUN cd services/agent_manager/frontend && npm run build
+RUN cd services/warden/frontend && npm run build
 
 # Stage 2: Production image
 FROM python:3.11-slim
@@ -38,11 +38,11 @@ RUN pip install --no-cache-dir \
     websockets==12.0 \
     pydantic>=2.0.0
 
-# Copy agent-manager code
-COPY services/agent_manager/ /app/
+# Copy warden code
+COPY services/warden/ /app/
 
 # Copy built frontend (may not exist in managed-only builds)
-COPY --from=frontend-builder /app/services/agent_manager/frontend/dist ./frontend/dist
+COPY --from=frontend-builder /app/services/warden/frontend/dist ./frontend/dist
 
 ENV PYTHONUNBUFFERED=1
 

@@ -10,7 +10,7 @@ This guide covers local development setup, testing, and Docker workflows for the
 
 # After startup:
 # - Admin UI: http://localhost:8081
-# - Agent shell: docker exec -it agent bash
+# - Cell shell: docker exec -it cell bash
 ```
 
 ## Directory Structure
@@ -18,7 +18,7 @@ This guide covers local development setup, testing, and Docker workflows for the
 ```
 .
 ├── docker-compose.yml              # All DP services
-├── agent.Dockerfile                # Agent container image
+├── cell.Dockerfile                 # Cell container image
 ├── configs/
 │   ├── cagent.yaml                 # Source of truth for domain policies
 │   ├── coredns/Corefile            # DNS filter (generated)
@@ -30,10 +30,10 @@ This guide covers local development setup, testing, and Docker workflows for the
 │   │   └── sinks/                  # Mode-specific sinks
 │   │       ├── standalone.yaml     # File backup + optional S3/ES
 │   │       └── connected.yaml      # CP API + file backup
-│   ├── seccomp/                    # Agent container seccomp profile
+│   ├── seccomp/                    # Cell container seccomp profile
 │   └── gvisor/runsc.toml           # gVisor config
 ├── services/
-│   ├── agent_manager/              # FastAPI app + config generator
+│   ├── warden/               # FastAPI app + config generator
 │   │   ├── main.py                 # App entry point
 │   │   ├── config_generator.py     # Generates DNS + proxy configs
 │   │   ├── constants.py            # Shared constants
@@ -68,7 +68,7 @@ pytest tests/ -v --ignore=tests/test_e2e.py    # unit + config tests
 
 ### E2E Tests
 
-E2E tests bring up the full data plane stack (agent, proxy, DNS, agent-manager), run tests against it, and tear everything down.
+E2E tests bring up the full data plane stack (cell, proxy, DNS, warden), run tests against it, and tear everything down.
 
 ```bash
 ./run_tests.sh --e2e
@@ -86,16 +86,16 @@ Tests include:
 
 | Profile | Description |
 |---------|-------------|
-| `dev` | Agent with runc runtime (development) |
-| `standard` | Agent with gVisor runtime (production) |
-| `admin` | Agent manager with admin UI |
-| `managed` | Agent manager without admin UI (connected mode) |
+| `dev` | Cell with runc runtime (development) |
+| `standard` | Cell with gVisor runtime (production) |
+| `admin` | Warden with admin UI |
+| `managed` | Warden without admin UI (connected mode) |
 | `auditing` | Log shipper (Vector) |
 | `ssh` | FRP tunnel client |
 | `email` | Email proxy (beta) |
 
 ```bash
-# Minimal (just proxy + DNS + agent)
+# Minimal (just proxy + DNS + cell)
 docker compose --profile dev up -d
 
 # With admin UI
@@ -111,10 +111,10 @@ docker compose --profile dev --profile managed --profile auditing up -d
 
 ## Frontend Development
 
-The admin UI frontend lives at `services/agent_manager/frontend/`.
+The admin UI frontend lives at `services/warden/frontend/`.
 
 ```bash
-cd services/agent_manager/frontend
+cd services/warden/frontend
 npm install
 npm run dev          # Vite dev server on :3000, proxies /api to :8080
 npm run lint         # ESLint (--max-warnings 0)
@@ -125,7 +125,7 @@ Shared components come from [@cagent/ui](https://github.com/kashyaprpuranik/cage
 
 ## Config Generation
 
-The agent-manager watches `cagent.yaml` and generates:
+The warden watches `cagent.yaml` and generates:
 - `coredns/Corefile` — DNS filter rules
 - `envoy/envoy-enhanced.yaml` — Envoy config with Lua filter
 

@@ -64,7 +64,7 @@ For connected mode (centralized management via control plane), see the [cagent-c
 | `requests_per_minute` | int | Rate limit (requests per minute) |
 | `burst_size` | int | Rate limit burst allowance |
 | `credential` | object | Credential to inject (`header`, `format`, `value`) |
-| `agent_id` | string | Scope to specific agent (null = tenant-global) |
+| `agent_id` | string | Scope to specific cell (null = tenant-global) |
 
 ### Path Filtering
 
@@ -82,9 +82,9 @@ By default, all paths are allowed for a domain. You can restrict access to speci
 
 ### Credential Injection
 
-Credentials are stored on domain policies and injected by Envoy at the proxy layer. The agent never sees API keys.
+Credentials are stored on domain policies and injected by Envoy at the proxy layer. The cell never sees API keys.
 
-**Domain aliases**: Setting `alias: "openai"` creates an `openai.devbox.local` shortcut. The agent can use `http://openai.devbox.local/v1/models` and Envoy resolves it to `api.openai.com` with credentials injected.
+**Domain aliases**: Setting `alias: "openai"` creates an `openai.devbox.local` shortcut. The cell can use `http://openai.devbox.local/v1/models` and Envoy resolves it to `api.openai.com` with credentials injected.
 
 ```bash
 # In cagent.yaml:
@@ -95,21 +95,21 @@ Credentials are stored on domain policies and injected by Envoy at the proxy lay
 #     format: "Bearer {value}"
 #     env: OPENAI_API_KEY
 #
-# Agent can use: curl http://openai.devbox.local/v1/models
+# Cell can use: curl http://openai.devbox.local/v1/models
 ```
 
 ## SSH Access
 
-Agent containers run an SSH server (key-auth only, no passwords, no root login). SSH is exposed on host port 2222 by default.
+Cell containers run an SSH server (key-auth only, no passwords, no root login). SSH is exposed on host port 2222 by default.
 
 ### Quick Start
 
 ```bash
-# Set your public key and start the agent
+# Set your public key and start the cell
 SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose --profile dev up -d
 
 # Connect
-ssh -p 2222 agent@localhost
+ssh -p 2222 cell@localhost
 ```
 
 ### Configuration
@@ -133,23 +133,23 @@ SSH sessions auto-attach to a tmux session. Work persists across SSH disconnects
 
 ```bash
 # List sessions
-ssh -p 2222 agent@localhost session list
+ssh -p 2222 cell@localhost session list
 
 # Detach from tmux: Ctrl+B, then D
 # Reconnect: ssh again — auto-attaches to existing session
 ```
 
-### Multiple Agents
+### Multiple Cells
 
-When scaling agents (`--scale agent-dev=N`), each container needs a unique host port. Use a port range:
+When scaling cells (`--scale cell-dev=N`), each container needs a unique host port. Use a port range:
 
 ```bash
 # In .env or shell
 SSH_PORT=2222-2232
 
 # Find which port maps to which container
-docker compose port --index 1 agent-dev 22
-docker compose port --index 2 agent-dev 22
+docker compose port --index 1 cell-dev 22
+docker compose port --index 2 cell-dev 22
 ```
 
 ### Remote SSH (via STCP Tunnel) - Beta

@@ -4,10 +4,10 @@
 # =============================================================================
 #
 # Self-bootstrapping entrypoint for the FRP tunnel client.
-# Calls the local agent-manager API to get-or-create STCP credentials,
+# Calls the local warden API to get-or-create STCP credentials,
 # writes frpc.toml, and exec's frpc.
 #
-# Agent-manager proxies to the control plane in connected mode and
+# Warden proxies to the control plane in connected mode and
 # returns 404 in standalone mode (no tunneling without a CP).
 #
 # Required env vars:
@@ -31,9 +31,9 @@ die() { echo "[tunnel-bootstrap] ERROR: $1" >&2; exit 1; }
 
 FRP_SERVER_PORT="${FRP_SERVER_PORT:-7000}"
 
-# ── Poll tunnel-config endpoint via agent-manager ───────────────────────────
+# ── Poll tunnel-config endpoint via warden ───────────────────────────
 
-API_URL="http://agent-manager:8080/api/v1/agent/tunnel-config"
+API_URL="http://warden:8080/api/v1/cell/tunnel-config"
 MAX_RETRIES=30
 RETRY_INTERVAL=10
 attempt=0

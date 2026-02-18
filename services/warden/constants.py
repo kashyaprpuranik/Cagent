@@ -1,4 +1,4 @@
-"""Constants for agent-manager."""
+"""Constants for warden."""
 
 import os
 from typing import List
@@ -9,10 +9,10 @@ import docker
 docker_client = docker.from_env()
 
 # ---------------------------------------------------------------------------
-# Agent discovery
+# Cell discovery
 # ---------------------------------------------------------------------------
-AGENT_LABEL = "cagent.role=agent"
-AGENT_CONTAINER_FALLBACK = "agent"
+CELL_LABEL = "cagent.role=cell"
+CELL_CONTAINER_FALLBACK = "cell"
 
 # ---------------------------------------------------------------------------
 # Infrastructure container names
@@ -20,7 +20,7 @@ AGENT_CONTAINER_FALLBACK = "agent"
 COREDNS_CONTAINER_NAME = "dns-filter"
 ENVOY_CONTAINER_NAME = "http-proxy"
 EMAIL_PROXY_CONTAINER_NAME = "email-proxy"
-AGENT_MANAGER_CONTAINER_NAME = "agent-manager"
+WARDEN_CONTAINER_NAME = "warden"
 FRPC_CONTAINER_NAME = "tunnel-client"
 
 # ---------------------------------------------------------------------------
@@ -67,21 +67,21 @@ BETA_FEATURES = set(
 # Container discovery helpers
 # ---------------------------------------------------------------------------
 
-def discover_agent_container_names() -> List[str]:
-    """Return names of agent containers discovered by label.
+def discover_cell_container_names() -> List[str]:
+    """Return names of cell containers discovered by label.
 
-    Falls back to the fixed name ``agent`` when no labelled containers exist.
+    Falls back to the fixed name ``cell`` when no labelled containers exist.
     """
     try:
         containers = docker_client.containers.list(
             all=True,
-            filters={"label": AGENT_LABEL},
+            filters={"label": CELL_LABEL},
         )
         if containers:
             return [c.name for c in containers]
     except Exception:
         pass
-    return [AGENT_CONTAINER_FALLBACK]
+    return [CELL_CONTAINER_FALLBACK]
 
 
 def _container_exists(name: str) -> bool:
@@ -96,19 +96,19 @@ def _container_exists(name: str) -> bool:
 def get_managed_containers() -> List[str]:
     """Build the managed-container list dynamically.
 
-    Agent containers are discovered by label; infrastructure containers are
-    static.  Optional containers (agent-manager, email-proxy) are included
+    Cell containers are discovered by label; infrastructure containers are
+    static.  Optional containers (warden, email-proxy) are included
     only when they actually exist.
     """
-    names = discover_agent_container_names()
+    names = discover_cell_container_names()
     names.extend([COREDNS_CONTAINER_NAME, ENVOY_CONTAINER_NAME])
-    if _container_exists(AGENT_MANAGER_CONTAINER_NAME):
-        names.append(AGENT_MANAGER_CONTAINER_NAME)
+    if _container_exists(WARDEN_CONTAINER_NAME):
+        names.append(WARDEN_CONTAINER_NAME)
     if "email" in BETA_FEATURES:
         names.append(EMAIL_PROXY_CONTAINER_NAME)
     return names
 
 
 # Backward-compat alias used by the detailed health and container routers.
-AGENT_CONTAINER_NAME = discover_agent_container_names()[0]
+CELL_CONTAINER_NAME = discover_cell_container_names()[0]
 MANAGED_CONTAINERS = get_managed_containers()

@@ -7,7 +7,7 @@ import { createTerminal, getContainers } from '../api/client';
 import '@xterm/xterm/css/xterm.css';
 
 const INFRA_CONTAINERS = new Set([
-  'dns-filter', 'http-proxy', 'email-proxy', 'tunnel-client', 'agent-manager',
+  'dns-filter', 'http-proxy', 'email-proxy', 'tunnel-client', 'warden',
 ]);
 
 export default function TerminalPage() {

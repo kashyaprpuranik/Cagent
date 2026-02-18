@@ -43,7 +43,7 @@ cd "$REPO_ROOT"
 npm install --workspaces --include-workspace-root --silent 2>/dev/null || true
 
 echo "--- DP local admin UI (tsc) ---"
-if (cd "$REPO_ROOT/services/agent_manager/frontend" && npx tsc --noEmit 2>&1); then
+if (cd "$REPO_ROOT/services/warden/frontend" && npx tsc --noEmit 2>&1); then
     echo "  DP local admin frontend: OK"
 else
     echo "  DP local admin frontend: FAILED"
@@ -59,16 +59,16 @@ if [ "$RUN_E2E" = true ]; then
     cd "$REPO_ROOT"
     CONTAINERS_STARTED=false
 
-    # E2E tests require: agent-dev (profile dev), agent-manager (profile admin),
+    # E2E tests require: cell-dev (profile dev), warden (profile admin),
     # standalone mode. Bring up or restart as needed.
     NEED_RESTART=false
 
-    # Check agent is running with the dev profile (runc), not standard (gVisor)
-    AGENT_CID=$(docker ps --filter "label=cagent.role=agent" --format "{{.ID}}" -q 2>/dev/null | head -1)
-    if [ -n "$AGENT_CID" ]; then
-        AGENT_SERVICE=$(docker inspect "$AGENT_CID" --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
-        if [ "$AGENT_SERVICE" = "agent" ]; then
-            echo "Agent is running with standard profile (gVisor), tearing down to restart with dev profile..."
+    # Check cell is running with the dev profile (runc), not standard (gVisor)
+    CELL_CID=$(docker ps --filter "label=cagent.role=cell" --format "{{.ID}}" -q 2>/dev/null | head -1)
+    if [ -n "$CELL_CID" ]; then
+        CELL_SERVICE=$(docker inspect "$CELL_CID" --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
+        if [ "$CELL_SERVICE" = "cell" ]; then
+            echo "Cell is running with standard profile (gVisor), tearing down to restart with dev profile..."
             docker compose --profile standard --profile admin --profile email --profile auditing down 2>/dev/null || true
             NEED_RESTART=true
         fi
@@ -76,9 +76,9 @@ if [ "$RUN_E2E" = true ]; then
         NEED_RESTART=true
     fi
 
-    # Check agent-manager and log-shipper are running (admin profile)
+    # Check warden and log-shipper are running (admin profile)
     if [ "$NEED_RESTART" = false ]; then
-        for svc in agent-manager log-shipper; do
+        for svc in warden log-shipper; do
             if ! docker ps --filter "name=^${svc}$" --format "{{.Names}}" 2>/dev/null | grep -q "$svc"; then
                 NEED_RESTART=true
                 break
@@ -86,7 +86,7 @@ if [ "$RUN_E2E" = true ]; then
         done
     fi
 
-    # Check agent-manager is running in standalone mode
+    # Check warden is running in standalone mode
     if [ "$NEED_RESTART" = false ]; then
         ADMIN_MODE=$(curl -sf http://localhost:8081/api/info 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('mode',''))" 2>/dev/null || true)
         if [ "$ADMIN_MODE" = "connected" ]; then
@@ -101,7 +101,7 @@ if [ "$RUN_E2E" = true ]; then
     cp configs/coredns/Corefile configs/coredns/.Corefile.bak
 
     # Always clean up stale networks (may have wrong labels from previous runs)
-    for net in cagent-infra-net cagent-agent-net; do
+    for net in cagent-infra-net cagent-cell-net; do
         if docker network inspect "$net" >/dev/null 2>&1; then
             for cid in $(docker network inspect "$net" --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do
                 echo "  Removing orphan container $cid from $net..."
@@ -116,14 +116,14 @@ if [ "$RUN_E2E" = true ]; then
         echo "Stopping any existing containers first..."
         docker compose --profile dev --profile admin --profile email --profile auditing down 2>/dev/null || true
         docker compose --profile standard --profile admin --profile email --profile auditing down 2>/dev/null || true
-        echo "Starting data plane (standalone, --profile dev --profile admin --profile auditing, 2 agents)..."
-        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build --scale agent-dev=2
+        echo "Starting data plane (standalone, --profile dev --profile admin --profile auditing, 2 cells)..."
+        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build --scale cell-dev=2
         CONTAINERS_STARTED=true
         echo "Waiting for containers to stabilize..."
         sleep 5
     else
         echo "Data plane already running, rebuilding images in case code changed..."
-        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build --scale agent-dev=2
+        DATAPLANE_MODE=standalone docker compose --profile dev --profile admin --profile auditing up -d --build --scale cell-dev=2
         echo "Waiting for containers to stabilize..."
         sleep 5
     fi

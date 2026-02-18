@@ -1,17 +1,17 @@
 # Ignore everything by default
 *
 
-# Allow workspace plumbing (agent-manager frontend build)
+# Allow workspace plumbing (warden frontend build)
 !package.json
 !package-lock.json
 
-# Allow agent manager (includes frontend source)
-!services/agent_manager/
-!services/agent_manager/**
+# Allow warden (includes frontend source)
+!services/warden/
+!services/warden/**
 
-# Allow agent container files
-!agent.Dockerfile
-!agent_entrypoint.sh
+# Allow cell container files
+!cell.Dockerfile
+!cell_entrypoint.sh
 !entrypoint.sh
 !configs/
 !configs/**

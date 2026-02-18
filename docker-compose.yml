@@ -24,24 +24,24 @@
 #
 #   With direct SSH access (port mapping):
 #     SSH_AUTHORIZED_KEYS="ssh-ed25519 AAAA..." docker-compose --profile dev up -d
-#     ssh -p 2222 agent@localhost
+#     ssh -p 2222 cell@localhost
 #
 #   With SSH tunnel (FRP/STCP for remote access):
 #     docker-compose --profile standard --profile ssh up -d
 #
 # Network Architecture:
-#   agent-net (isolated, internal)
-#     └── agent(s): can ONLY reach http-proxy + dns-filter (dynamic IPs)
-#     Scale with: docker compose --scale agent-dev=N
+#   cell-net (isolated, internal)
+#     └── cell(s): can ONLY reach http-proxy + dns-filter (dynamic IPs)
+#     Scale with: docker compose --scale cell-dev=N
 #
 #   infra-net (can reach control plane)
-#     └── http-proxy, dns-filter (bridged to agent-net)
-#     └── agent-manager (config sync, admin UI, domain policy API)
+#     └── http-proxy, dns-filter (bridged to cell-net)
+#     └── warden (config sync, admin UI, domain policy API)
 #     └── log-shipper (log forwarding) - optional
 #     └── email-proxy (IMAP/SMTP proxy) - optional, beta
 #
 # Security Controls:
-#   - Agent has no direct internet/CP access (IP bypass prevention)
+#   - Cell has no direct internet/CP access (IP bypass prevention)
 #   - Credential injection handled by HTTP proxy Lua filter
 #   - Only HTTP proxy and log shipper can reach control plane
 #
@@ -49,20 +49,20 @@
 
 services:
   # ===========================================================================
-  # Agent Container (DEVELOPMENT - runc runtime, no gVisor)
+  # Cell (DEVELOPMENT - runc runtime, no gVisor)
   # Use when gVisor is not installed or for local development
   # For production, use --profile standard (gVisor) instead
   # ===========================================================================
-  agent-dev:
+  cell-dev:
     build:
       context: .
-      dockerfile: agent.Dockerfile
+      dockerfile: cell.Dockerfile
       args:
-        - VARIANT=${AGENT_VARIANT:-lean}
-    image: agent:${AGENT_VARIANT:-lean}
-    # No container_name — allows `docker compose --scale agent-dev=N`
+        - VARIANT=${CELL_VARIANT:-lean}
+    image: cell:${CELL_VARIANT:-lean}
+    # No container_name — allows `docker compose --scale cell-dev=N`
     labels:
-      - "cagent.role=agent"
+      - "cagent.role=cell"
       - "cagent.log-collect=true"
     profiles:
       - dev
@@ -76,7 +76,7 @@ services:
     security_opt:
       - no-new-privileges:true
       # Block raw sockets to prevent proxy bypass via packet crafting
-      - seccomp:./configs/seccomp/agent-profile.json
+      - seccomp:./configs/seccomp/cell-profile.json
 
     # Resource limits
     deploy:
@@ -100,7 +100,7 @@ services:
       - https_proxy=http://10.200.1.10:8443
       - NO_PROXY=localhost,127.0.0.1
       - no_proxy=localhost,127.0.0.1
-      - USER_NAME=agent
+      - USER_NAME=cell
       # SSH public keys (paste your public key here or mount file)
       - SSH_AUTHORIZED_KEYS=${SSH_AUTHORIZED_KEYS:-}
       # Tmux session settings
@@ -113,15 +113,15 @@ services:
 
     # Volumes
     volumes:
-      - agent-logs:/var/log/agent
-      - agent-workspace:/workspace
+      - cell-logs:/var/log/cell
+      - cell-workspace:/workspace
       # Optional: mount SSH keys file
       # - ./ssh-keys:/ssh-keys:ro
 
-    # ONLY on agent-net - cannot reach infra-net or external directly
+    # ONLY on cell-net - cannot reach infra-net or external directly
     # IP auto-assigned from 10.200.1.0/24 (static IPs only on infra services)
     networks:
-      agent-net: {}
+      cell-net: {}
 
     # Capture output to Docker logs (read by log shipper)
     logging:
@@ -143,20 +143,20 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # Agent Container (STANDARD - gVisor isolation, recommended for production)
+  # Cell (STANDARD - gVisor isolation, recommended for production)
   # Requires gVisor: https://gvisor.dev/docs/user_guide/install/
   # Use --profile dev if gVisor is not installed
   # ===========================================================================
-  agent:
+  cell:
     build:
       context: .
-      dockerfile: agent.Dockerfile
+      dockerfile: cell.Dockerfile
       args:
-        - VARIANT=${AGENT_VARIANT:-lean}
-    image: agent:${AGENT_VARIANT:-lean}
-    # No container_name — allows `docker compose --scale agent=N`
+        - VARIANT=${CELL_VARIANT:-lean}
+    image: cell:${CELL_VARIANT:-lean}
+    # No container_name — allows `docker compose --scale cell=N`
     labels:
-      - "cagent.role=agent"
+      - "cagent.role=cell"
       - "cagent.log-collect=true"
     profiles:
       - standard
@@ -167,7 +167,7 @@ services:
     # Strict security options
     security_opt:
       - no-new-privileges:true
-      - seccomp:./configs/seccomp/agent-profile.json  # defense-in-depth: host seccomp + gVisor
+      - seccomp:./configs/seccomp/cell-profile.json  # defense-in-depth: host seccomp + gVisor
 
     # Stricter resource limits for secure mode
     deploy:
@@ -191,7 +191,7 @@ services:
       - https_proxy=http://10.200.1.10:8443
       - NO_PROXY=localhost,127.0.0.1
       - no_proxy=localhost,127.0.0.1
-      - USER_NAME=agent
+      - USER_NAME=cell
       - SSH_AUTHORIZED_KEYS=${SSH_AUTHORIZED_KEYS:-}
       - TMUX_AUTO_ATTACH=${TMUX_AUTO_ATTACH:-1}
       - TMUX_SESSION=${TMUX_SESSION:-main}
@@ -202,13 +202,13 @@ services:
 
     # Volumes (more restricted in secure mode)
     volumes:
-      - agent-logs:/var/log/agent
-      - agent-workspace:/workspace:rw
+      - cell-logs:/var/log/cell
+      - cell-workspace:/workspace:rw
 
-    # ONLY on agent-net
+    # ONLY on cell-net
     # IP auto-assigned from 10.200.1.0/24 (static IPs only on infra services)
     networks:
-      agent-net: {}
+      cell-net: {}
 
     logging:
       driver: json-file
@@ -230,8 +230,8 @@ services:
 
   # ===========================================================================
   # DNS Filter - CoreDNS with domain allowlist
-  # Bridged to both networks so agent can resolve DNS
-  # Corefile generated by agent-manager from CP allowlist + static config
+  # Bridged to both networks so cell can resolve DNS
+  # Corefile generated by warden from CP allowlist + static config
   # ===========================================================================
   dns-filter:
     image: coredns/coredns:latest
@@ -243,7 +243,7 @@ services:
     #   replicas: ${DNS_FILTER_REPLICAS:-1}
 
     volumes:
-      # Corefile from host (static default, overwritten by agent-manager when it syncs)
+      # Corefile from host (static default, overwritten by warden when it syncs)
       - ./configs/coredns:/etc/coredns
 
     command: ["-conf", "/etc/coredns/Corefile"]
@@ -254,9 +254,9 @@ services:
       timeout: 5s
       retries: 3
 
-    # On BOTH networks - agent-net for agent access, infra-net for upstream
+    # On BOTH networks - cell-net for cell access, infra-net for upstream
     networks:
-      agent-net:
+      cell-net:
         ipv4_address: 10.200.1.5
       infra-net:
         ipv4_address: 10.200.2.5
@@ -265,7 +265,7 @@ services:
 
   # ===========================================================================
   # HTTP Proxy - Egress gateway with logging and credential injection
-  # Config generated by agent-manager from cagent.yaml
+  # Config generated by warden from cagent.yaml
   # ===========================================================================
   http-proxy:
     image: envoyproxy/envoy:v1.28-latest
@@ -277,7 +277,7 @@ services:
     #   replicas: ${HTTP_PROXY_REPLICAS:-1}
 
     volumes:
-      # Generated config from agent-manager (falls back to static if not present)
+      # Generated config from warden (falls back to static if not present)
       - proxy-config:/etc/envoy
       # Static config as fallback (copied by entrypoint if no generated config)
       - ./configs/envoy/envoy-enhanced.yaml:/etc/envoy/envoy.default.yaml:ro
@@ -288,7 +288,7 @@ services:
 
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
 
-    # No env vars needed: Lua filter talks to agent-manager (local, no auth)
+    # No env vars needed: Lua filter talks to warden (local, no auth)
 
     # JSON logs to stdout (captured by Docker, read by log shipper)
     logging:
@@ -297,9 +297,9 @@ services:
         max-size: "50m"
         max-file: "3"
 
-    # On BOTH networks - agent-net for agent access, infra-net for egress + CP access
+    # On BOTH networks - cell-net for cell access, infra-net for egress + CP access
     networks:
-      agent-net:
+      cell-net:
         ipv4_address: 10.200.1.10
       infra-net:
         ipv4_address: 10.200.2.10
@@ -323,7 +323,7 @@ services:
 
   # ===========================================================================
   # Log Shipper - Log Collection & Forwarding
-  # Collects Docker logs, gVisor audit logs, agent app logs
+  # Collects Docker logs, gVisor audit logs, cell app logs
   # Optional: Only runs with --profile auditing
   # ===========================================================================
   log-shipper:
@@ -335,7 +335,7 @@ services:
     volumes:
       - ./configs/vector/vector.yaml:/etc/vector/vector.yaml:ro
       - ./configs/vector/sinks/${DATAPLANE_MODE:-standalone}.yaml:/etc/vector/sinks.yaml:ro
-      - agent-logs:/var/log/agent:ro
+      - cell-logs:/var/log/cell:ro
       - log-shipper-data:/var/lib/vector
       - log-shipper-backup:/var/log/vector
       # Docker socket for container log collection
@@ -373,16 +373,16 @@ services:
       retries: 3
 
   # ===========================================================================
-  # Agent Manager - Unified data plane service
+  # Warden - Unified data plane service
   # Handles config generation, container management, CP sync, and admin UI
   # In admin profile: includes local admin UI (frontend + full API)
   # In managed profile: API-only (no frontend)
   # ===========================================================================
-  agent-manager:
+  warden:
     build:
       context: .
-      dockerfile: services/agent_manager/Dockerfile
-    container_name: agent-manager
+      dockerfile: services/warden/Dockerfile
+    container_name: warden
     labels:
       - "cagent.log-collect=true"
     profiles:
@@ -405,9 +405,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Main config file (read-write for admin UI config editing)
       - ./configs/cagent.yaml:/etc/cagent/cagent.yaml
-      # CoreDNS config directory (agent-manager overwrites Corefile here)
+      # CoreDNS config directory (warden overwrites Corefile here)
       - ./configs/coredns:/etc/coredns
-      # HTTP proxy config volume (agent-manager writes generated config here)
+      # HTTP proxy config volume (warden writes generated config here)
       - proxy-config:/etc/envoy
       # Seccomp profiles for container recreation
       - ./configs/seccomp/profiles:/etc/seccomp/profiles:ro
@@ -458,7 +458,7 @@ services:
     volumes:
       - ./configs/cagent.yaml:/etc/cagent/cagent.yaml:ro
 
-    # On infra-net only - agent accesses via Envoy on agent-net
+    # On infra-net only - cell accesses via Envoy on cell-net
     networks:
       infra-net:
         ipv4_address: 10.200.2.40
@@ -502,10 +502,10 @@ services:
       - ./configs/frpc/entrypoint.sh:/bootstrap/entrypoint.sh:ro
 
     # On BOTH networks:
-    # - agent-net: to reach agent SSH (uses Docker DNS: agent-dev or agent)
-    # - infra-net: to reach tunnel server (outbound) and agent-manager API
+    # - cell-net: to reach cell SSH (uses Docker DNS: cell-dev or cell)
+    # - infra-net: to reach tunnel server (outbound) and warden API
     networks:
-      agent-net:
+      cell-net:
         ipv4_address: 10.200.1.30
       infra-net:
         ipv4_address: 10.200.2.30
@@ -517,8 +517,8 @@ services:
       retries: 3
 
     depends_on:
-      - agent
-      - agent-manager
+      - cell
+      - warden
 
     restart: unless-stopped
 
@@ -526,9 +526,9 @@ services:
 # Networks
 # =============================================================================
 networks:
-  # Agent network - INTERNAL, no external access
-  agent-net:
-    name: cagent-agent-net
+  # Cell network - INTERNAL, no external access
+  cell-net:
+    name: cagent-cell-net
     driver: bridge
     internal: true  # No external connectivity
     enable_ipv6: false  # Prevent IPv6 bypass of egress controls
@@ -549,8 +549,8 @@ networks:
 # Volumes
 # =============================================================================
 volumes:
-  agent-logs:
-  agent-workspace:
+  cell-logs:
+  cell-workspace:
   proxy-config:
   log-shipper-data:
   log-shipper-backup:

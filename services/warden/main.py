@@ -1,5 +1,5 @@
 """
-Agent Manager - Unified data plane service.
+Warden - Unified data plane service.
 
 Combines the polling daemon (heartbeat, config sync, container management)
 with the local admin HTTP API (config CRUD, container control, WebSocket
@@ -38,8 +38,8 @@ from constants import (
     CONTROL_PLANE_URL,
     CONTROL_PLANE_TOKEN,
     HEARTBEAT_INTERVAL,
-    AGENT_LABEL,
-    AGENT_CONTAINER_FALLBACK,
+    CELL_LABEL,
+    CELL_CONTAINER_FALLBACK,
     CAGENT_CONFIG_PATH,
     COREDNS_COREFILE_PATH,
     ENVOY_CONFIG_PATH,
@@ -78,16 +78,16 @@ _container_original_resources: dict = {}
 # Container discovery
 # ---------------------------------------------------------------------------
 
-def discover_agent_containers() -> List:
-    """Discover agent containers by the ``cagent.role=agent`` label.
+def discover_cell_containers() -> List:
+    """Discover cell containers by the ``cagent.role=cell`` label.
 
-    Falls back to looking up a container named ``agent`` when no labelled
+    Falls back to looking up a container named ``cell`` when no labelled
     containers are found (backward compat with unlabelled setups).
     """
     try:
         containers = docker_client.containers.list(
             all=True,
-            filters={"label": AGENT_LABEL},
+            filters={"label": CELL_LABEL},
         )
         if containers:
             return containers
@@ -96,7 +96,7 @@ def discover_agent_containers() -> List:
 
     # Fallback: try the fixed name
     try:
-        container = docker_client.containers.get(AGENT_CONTAINER_FALLBACK)
+        container = docker_client.containers.get(CELL_CONTAINER_FALLBACK)
         return [container]
     except docker.errors.NotFound:
         return []
@@ -152,7 +152,7 @@ def _get_current_seccomp_label(container) -> Optional[str]:
 
 
 def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
-    """Recreate an agent container with a new seccomp profile.
+    """Recreate an cell container with a new seccomp profile.
 
     Stops the old container, removes it, creates a new one with the
     same configuration but the new seccomp profile, and starts it.
@@ -393,7 +393,7 @@ def update_container_resources(container, cpu_limit=None, memory_limit_mb=None, 
 # ---------------------------------------------------------------------------
 
 def get_container_status(container) -> dict:
-    """Get status metrics for a single agent container."""
+    """Get status metrics for a single cell container."""
     try:
         container.reload()
     except docker.errors.APIError as e:
@@ -460,7 +460,7 @@ def get_container_status(container) -> dict:
 # ---------------------------------------------------------------------------
 
 def execute_command(command: str, container, args: Optional[dict] = None) -> tuple:
-    """Execute a command on a specific agent container.
+    """Execute a command on a specific cell container.
 
     Returns (success: bool, message: str).
     """
@@ -470,15 +470,15 @@ def execute_command(command: str, container, args: Optional[dict] = None) -> tup
     try:
         if command == "restart":
             container.restart(timeout=10)
-            return True, f"Agent container {name} restarted"
+            return True, f"Cell container {name} restarted"
 
         elif command == "stop":
             container.stop(timeout=10)
-            return True, f"Agent container {name} stopped"
+            return True, f"Cell container {name} stopped"
 
         elif command == "start":
             container.start()
-            return True, f"Agent container {name} started"
+            return True, f"Cell container {name} started"
 
         elif command == "wipe":
             wipe_workspace = args.get("wipe_workspace", False) if args else False
@@ -517,7 +517,7 @@ def execute_command(command: str, container, args: Optional[dict] = None) -> tup
 
 
 # ---------------------------------------------------------------------------
-# Infrastructure restarts (shared across all agents)
+# Infrastructure restarts (shared across all cells)
 # ---------------------------------------------------------------------------
 
 def restart_coredns():
@@ -551,7 +551,7 @@ def reload_envoy():
 
 
 # ---------------------------------------------------------------------------
-# Config generation (shared — same Corefile / Envoy config for all agents)
+# Config generation (shared — same Corefile / Envoy config for all cells)
 # ---------------------------------------------------------------------------
 
 def _stable_hash(content: str) -> str:
@@ -687,7 +687,7 @@ def sync_config() -> bool:
 # Heartbeat
 # ---------------------------------------------------------------------------
 
-def _send_bare_heartbeat(agent_name: str, command: str, result: str, message: str):
+def _send_bare_heartbeat(cell_name: str, command: str, result: str, message: str):
     """Send a heartbeat without a live container (e.g., after wipe).
 
     Used to report command results when the container no longer exists.
@@ -702,17 +702,17 @@ def _send_bare_heartbeat(agent_name: str, command: str, result: str, message: st
     }
     try:
         requests.post(
-            f"{CONTROL_PLANE_URL}/api/v1/agent/heartbeat",
+            f"{CONTROL_PLANE_URL}/api/v1/cell/heartbeat",
             json=heartbeat,
             headers={"Authorization": f"Bearer {CONTROL_PLANE_TOKEN}"},
             timeout=10,
         )
     except Exception as e:
-        logger.warning(f"Failed to send bare heartbeat for {agent_name}: {e}")
+        logger.warning(f"Failed to send bare heartbeat for {cell_name}: {e}")
 
 
 def send_heartbeat(container) -> Optional[dict]:
-    """Send heartbeat for a single agent container to control plane.
+    """Send heartbeat for a single cell container to control plane.
 
     Returns the parsed response (may contain a pending command), or None.
     """
@@ -744,7 +744,7 @@ def send_heartbeat(container) -> Optional[dict]:
 
     try:
         response = requests.post(
-            f"{CONTROL_PLANE_URL}/api/v1/agent/heartbeat",
+            f"{CONTROL_PLANE_URL}/api/v1/cell/heartbeat",
             json=heartbeat,
             headers={"Authorization": f"Bearer {CONTROL_PLANE_TOKEN}"},
             timeout=10,
@@ -946,13 +946,13 @@ def _check_standalone_resources(agents):
 
 def main_loop():
     """Main loop: discover agents, send heartbeats, execute commands, sync config."""
-    logger.info("Agent manager polling loop starting")
+    logger.info("Warden polling loop starting")
     logger.info(f"  Mode: {DATAPLANE_MODE}")
     logger.info(f"  Config file: {CAGENT_CONFIG_PATH}")
     logger.info(f"  CoreDNS config: {COREDNS_COREFILE_PATH}")
     logger.info(f"  Envoy config: {ENVOY_CONFIG_PATH}")
     logger.info(f"  Envoy Lua filter: {ENVOY_LUA_PATH}")
-    logger.info(f"  Agent discovery label: {AGENT_LABEL}")
+    logger.info(f"  Cell discovery label: {CELL_LABEL}")
     logger.info(f"  Config sync interval: {CONFIG_SYNC_INTERVAL}s")
 
     if DATAPLANE_MODE == "connected":
@@ -964,8 +964,8 @@ def main_loop():
         logger.info("  Running in standalone mode (no control plane sync)")
 
     # Log initially discovered agents
-    agents = discover_agent_containers()
-    logger.info(f"  Discovered {len(agents)} agent container(s): {[c.name for c in agents]}")
+    agents = discover_cell_containers()
+    logger.info(f"  Discovered {len(agents)} cell container(s): {[c.name for c in agents]}")
 
     # Initial config generation from cagent.yaml (always write on startup)
     logger.info("Generating initial configs from cagent.yaml...")
@@ -990,11 +990,11 @@ def main_loop():
 
     while True:
         try:
-            # Discover agent containers each cycle (handles containers
+            # Discover cell containers each cycle (handles containers
             # being added/removed at runtime)
-            agents = discover_agent_containers()
+            agents = discover_cell_containers()
 
-            # In connected mode, send heartbeat and handle commands per agent (concurrent)
+            # In connected mode, send heartbeat and handle commands per cell (concurrent)
             if DATAPLANE_MODE == "connected" and CONTROL_PLANE_TOKEN:
                 workers = min(MAX_HEARTBEAT_WORKERS, len(agents)) if agents else 1
                 with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -1037,7 +1037,7 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(
-    title="Cagent Agent Manager",
+    title="Cagent Warden",
     description="Unified data plane service: config management, container control, and CP sync",
     version="1.0.0",
     lifespan=lifespan,

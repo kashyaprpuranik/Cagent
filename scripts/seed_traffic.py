@@ -5,10 +5,10 @@ Data Plane Log Seed Traffic Generator.
 Generates realistic traffic through DP services to produce logs:
   - CoreDNS query logs (allowed + blocked domains)
   - Envoy access logs (HTTP requests through proxy)
-  - Agent container stdout logs (sandbox activity)
+  - Cell container stdout logs (sandbox activity)
 
-Run inside the agent container:
-    docker exec agent python3 /seed_traffic.py
+Run inside the cell container:
+    docker exec cell python3 /seed_traffic.py
 
 Logs flow: DP services -> Vector -> CP ingest API -> OpenObserve
 """
@@ -111,7 +111,7 @@ def main():
     # -----------------------------------------------------------------
     # 3. Agent — container activity logs (stdout captured by Vector)
     # -----------------------------------------------------------------
-    print("[agent] Generating sandbox activity logs...")
+    print("[cell] Generating sandbox activity logs...")
 
     print(f"  Python {sys.version.split()[0]} ready in sandbox")
 

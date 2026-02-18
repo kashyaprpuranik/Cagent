@@ -162,7 +162,7 @@ export default function LogsPage() {
     staleTime: 30_000,
   });
 
-  const INFRA_NAMES = useMemo(() => new Set(['dns-filter', 'http-proxy', 'email-proxy', 'tunnel-client', 'agent-manager']), []);
+  const INFRA_NAMES = useMemo(() => new Set(['dns-filter', 'http-proxy', 'email-proxy', 'tunnel-client', 'warden']), []);
 
   const containers = useMemo(() => {
     // Discover agent containers dynamically, keep infra containers static
@@ -172,11 +172,11 @@ export default function LogsPage() {
     const agentNames = allContainers
       .filter((c) => !INFRA_NAMES.has(c.name))
       .map((c) => c.name);
-    const hasAgentManager = allContainers.some((c) => c.name === 'agent-manager');
+    const hasWarden = allContainers.some((c) => c.name === 'warden');
     return [
       'http-proxy', 'dns-filter',
       ...agentNames,
-      ...(hasAgentManager ? ['agent-manager'] : []),
+      ...(hasWarden ? ['warden'] : []),
       ...(emailEnabled ? ['email-proxy'] : []),
     ];
   }, [containersData, emailEnabled, INFRA_NAMES]);

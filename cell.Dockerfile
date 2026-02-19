@@ -141,7 +141,7 @@ RUN if [ "$VARIANT" = "ml" ]; then \
     ; fi
 
 # =============================================================================
-# AI variant: AI coding CLIs (Claude Code, Codex, OpenClaw, Aider, Copilot)
+# AI variant: AI coding CLIs (Claude Code, Codex, OpenClaw, Copilot)
 # =============================================================================
 RUN if [ "$VARIANT" = "ai" ]; then \
     # Claude Code
@@ -152,8 +152,6 @@ RUN if [ "$VARIANT" = "ai" ]; then \
     && npm install -g openclaw@latest \
     # GitHub Copilot CLI
     && npm install -g @github/copilot \
-    # Aider (AI pair programming)
-    && pip3 install --no-cache-dir aider-chat \
     ; fi
 
 # =============================================================================

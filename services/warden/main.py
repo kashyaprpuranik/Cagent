@@ -1098,9 +1098,22 @@ if FRONTEND_DIR.exists():
         if path.startswith("api/"):
             raise HTTPException(404)
 
-        file_path = FRONTEND_DIR / path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
+        try:
+            # Resolve the requested path relative to FRONTEND_DIR
+            file_path = (FRONTEND_DIR / path).resolve()
+
+            # Ensure the resolved path is still within FRONTEND_DIR
+            # This prevents path traversal attacks (e.g., /../../etc/passwd)
+            if not file_path.is_relative_to(FRONTEND_DIR.resolve()):
+                # Path traversal detected - return index.html (SPA fallback)
+                return FileResponse(FRONTEND_DIR / "index.html")
+
+            if file_path.exists() and file_path.is_file():
+                return FileResponse(file_path)
+        except Exception:
+            # Path resolution error or other issue
+            pass
+
         return FileResponse(FRONTEND_DIR / "index.html")
 
 

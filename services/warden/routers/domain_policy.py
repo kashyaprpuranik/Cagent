@@ -14,7 +14,8 @@ import time
 
 import requests
 import yaml
-from fastapi import APIRouter, Query
+from typing import Optional
+from fastapi import APIRouter, Query, Header
 from pathlib import Path
 
 from constants import (
@@ -142,7 +143,10 @@ def _resolve_devbox_alias(domain: str) -> str | None:
 
 
 @router.get("/api/v1/domain-policies/for-domain")
-async def get_domain_policy(domain: str = Query(..., min_length=1)):
+async def get_domain_policy(
+    domain: str = Query(..., min_length=1),
+    authorization: Optional[str] = Header(None),
+):
     """Get domain policy for a given domain.
 
     devbox.local domains: always resolve locally from cagent.yaml
@@ -151,21 +155,21 @@ async def get_domain_policy(domain: str = Query(..., min_length=1)):
     Standalone mode: build from cagent.yaml.
     """
     domain_lower = domain.lower()
+    policy = None
 
     # Check cache
     cached = _cache_get(domain_lower)
     if cached is not None:
-        return cached
+        policy = cached
 
     # devbox.local aliases are always resolved locally — the CP doesn't
     # know about them since they're a data-plane convenience for HTTP
     # credential injection.
-    if _is_devbox_local(domain_lower):
+    if not policy and _is_devbox_local(domain_lower):
         policy = _build_standalone_policy(domain_lower)
         _cache_set(domain_lower, policy)
-        return policy
 
-    if DATAPLANE_MODE == "connected" and CONTROL_PLANE_URL and CONTROL_PLANE_TOKEN:
+    if not policy and DATAPLANE_MODE == "connected" and CONTROL_PLANE_URL and CONTROL_PLANE_TOKEN:
         # Forward to control plane
         try:
             resp = requests.get(
@@ -177,7 +181,6 @@ async def get_domain_policy(domain: str = Query(..., min_length=1)):
             if resp.status_code == 200:
                 policy = resp.json()
                 _cache_set(domain_lower, policy)
-                return policy
             else:
                 logger.warning(
                     f"CP domain-policy lookup failed: {resp.status_code}, "
@@ -187,6 +190,22 @@ async def get_domain_policy(domain: str = Query(..., min_length=1)):
             logger.warning(f"CP unreachable for domain-policy: {e}, falling back to cagent.yaml")
 
     # Standalone mode or CP fallback
-    policy = _build_standalone_policy(domain_lower)
-    _cache_set(domain_lower, policy)
+    if not policy:
+        policy = _build_standalone_policy(domain_lower)
+        _cache_set(domain_lower, policy)
+
+    # Redact sensitive fields if unauthenticated
+    is_authenticated = False
+    if authorization and CONTROL_PLANE_TOKEN:
+        expected = f"Bearer {CONTROL_PLANE_TOKEN}"
+        if authorization == expected:
+            is_authenticated = True
+
+    if not is_authenticated:
+        # Return a copy with sensitive fields removed
+        policy = policy.copy()
+        policy.pop("header_name", None)
+        policy.pop("header_value", None)
+        policy.pop("target_domain", None)
+
     return policy

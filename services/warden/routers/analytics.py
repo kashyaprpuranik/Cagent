@@ -47,7 +47,7 @@ def _parse_log_entries(raw: str):
 
 
 @router.get("/analytics/blocked-domains")
-async def get_blocked_domains(
+def get_blocked_domains(
     hours: int = Query(default=1, le=24),
     limit: int = Query(default=10, le=50),
 ):
@@ -94,7 +94,7 @@ async def get_blocked_domains(
 
 
 @router.get("/analytics/blocked-domains/timeseries")
-async def get_blocked_timeseries(
+def get_blocked_timeseries(
     hours: int = Query(default=1, ge=1, le=24),
     buckets: int = Query(default=12, ge=2, le=60),
 ):
@@ -151,7 +151,7 @@ async def get_blocked_timeseries(
 
 
 @router.get("/analytics/bandwidth")
-async def get_bandwidth(
+def get_bandwidth(
     hours: int = Query(default=1, ge=1, le=24),
     limit: int = Query(default=10, le=50),
 ):
@@ -201,7 +201,7 @@ async def get_bandwidth(
 
 
 @router.get("/analytics/diagnose")
-async def diagnose_domain(
+def diagnose_domain(
     domain: str = Query(..., min_length=1),
 ):
     """Diagnose why a domain was blocked. Checks allowlist, DNS, and recent logs."""

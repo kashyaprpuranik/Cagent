@@ -3,7 +3,7 @@ from typing import Optional
 import docker
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from constants import docker_client
+from constants import docker_client, get_managed_containers
 
 router = APIRouter()
 
@@ -11,6 +11,10 @@ router = APIRouter()
 @router.get("/containers/{name}/logs")
 async def get_container_logs(name: str, tail: int = 100, since: Optional[str] = None):
     """Get container logs."""
+    # Restrict access to managed containers only
+    if name not in get_managed_containers():
+        raise HTTPException(403, f"Access denied: {name} is not a managed container")
+
     try:
         container = docker_client.containers.get(name)
 
@@ -33,6 +37,12 @@ async def get_container_logs(name: str, tail: int = 100, since: Optional[str] = 
 async def stream_container_logs(websocket: WebSocket, name: str):
     """Stream container logs via WebSocket."""
     await websocket.accept()
+
+    # Restrict access to managed containers only
+    if name not in get_managed_containers():
+        await websocket.send_text(f"ERROR: Access denied: {name} is not a managed container")
+        await websocket.close()
+        return
 
     try:
         container = docker_client.containers.get(name)

@@ -47,11 +47,15 @@ def _parse_log_entries(raw: str):
 
 
 @router.get("/analytics/blocked-domains")
-async def get_blocked_domains(
+def get_blocked_domains(
     hours: int = Query(default=1, le=24),
     limit: int = Query(default=10, le=50),
 ):
-    """Get top blocked (403) domains from Envoy access logs."""
+    """Get top blocked (403) domains from Envoy access logs.
+
+    Note: This handler is synchronous (def) to run in a threadpool, preventing
+    blocking I/O (Docker logs) from blocking the main event loop.
+    """
     raw = _get_envoy_logs(hours)
 
     domain_counts: dict[str, int] = defaultdict(int)
@@ -94,11 +98,15 @@ async def get_blocked_domains(
 
 
 @router.get("/analytics/blocked-domains/timeseries")
-async def get_blocked_timeseries(
+def get_blocked_timeseries(
     hours: int = Query(default=1, ge=1, le=24),
     buckets: int = Query(default=12, ge=2, le=60),
 ):
-    """Get blocked request counts bucketed by time interval."""
+    """Get blocked request counts bucketed by time interval.
+
+    Note: This handler is synchronous (def) to run in a threadpool, preventing
+    blocking I/O (Docker logs) from blocking the main event loop.
+    """
     raw = _get_envoy_logs(hours)
 
     end_time = datetime.now(timezone.utc)
@@ -151,11 +159,15 @@ async def get_blocked_timeseries(
 
 
 @router.get("/analytics/bandwidth")
-async def get_bandwidth(
+def get_bandwidth(
     hours: int = Query(default=1, ge=1, le=24),
     limit: int = Query(default=10, le=50),
 ):
-    """Get bandwidth usage per domain from Envoy access logs."""
+    """Get bandwidth usage per domain from Envoy access logs.
+
+    Note: This handler is synchronous (def) to run in a threadpool, preventing
+    blocking I/O (Docker logs) from blocking the main event loop.
+    """
     raw = _get_envoy_logs(hours)
 
     domain_stats: dict[str, dict] = defaultdict(
@@ -201,10 +213,14 @@ async def get_bandwidth(
 
 
 @router.get("/analytics/diagnose")
-async def diagnose_domain(
+def diagnose_domain(
     domain: str = Query(..., min_length=1),
 ):
-    """Diagnose why a domain was blocked. Checks allowlist, DNS, and recent logs."""
+    """Diagnose why a domain was blocked. Checks allowlist, DNS, and recent logs.
+
+    Note: This handler is synchronous (def) to run in a threadpool, preventing
+    blocking I/O (Docker logs, subprocess) from blocking the main event loop.
+    """
     # Validate domain format to prevent command injection
     if not _VALID_DOMAIN_RE.match(domain) or len(domain) > 253:
         raise HTTPException(status_code=400, detail="Invalid domain format")

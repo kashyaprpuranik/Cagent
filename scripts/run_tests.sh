@@ -2,12 +2,12 @@
 # Run tests for the Cagent data plane.
 #
 # Usage:
-#   ./run_tests.sh          # DP unit/config + frontend type-check
-#   ./run_tests.sh --e2e    # All tests including DP e2e
+#   ./scripts/run_tests.sh          # DP unit/config + frontend type-check
+#   ./scripts/run_tests.sh --e2e    # All tests including DP e2e
 
 set -e
 
-REPO_ROOT=$(cd "$(dirname "$0")" && pwd)
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
 RUN_E2E=false
 

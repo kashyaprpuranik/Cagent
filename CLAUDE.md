@@ -49,10 +49,11 @@ This repo contains the **data plane** — the secure agent execution environment
 │   │   └── frontend/               # React admin UI (built into warden image)
 │   └── email_proxy/                # Email egress control (beta)
 ├── tests/                          # Unit and E2E tests
-├── scripts/                        # Utility scripts (seed_traffic.py)
+├── scripts/
+│   ├── local.sh                    # Dev environment orchestration
+│   ├── run_tests.sh                # Test runner
+│   └── seed_traffic.py             # Traffic seeding utility
 ├── docs/                           # Configuration guide
-├── dev_up.sh                       # Dev environment orchestration
-└── run_tests.sh                    # Test runner
 ```
 
 ## Tech Stack
@@ -74,23 +75,23 @@ This repo contains the **data plane** — the secure agent execution environment
 
 ```bash
 # Standalone with admin UI (default)
-./dev_up.sh
+./scripts/local.sh
 
 # Minimal (no warden, static config)
-./dev_up.sh --minimal
+./scripts/local.sh --minimal
 
 # Stop everything
-./dev_up.sh down
+./scripts/local.sh down
 ```
 
 ### Running Tests
 
 ```bash
 # DP unit/config tests + frontend type-check (default)
-./run_tests.sh
+./scripts/run_tests.sh
 
 # All tests including E2E (requires Docker)
-./run_tests.sh --e2e
+./scripts/run_tests.sh --e2e
 ```
 
 #### DP Tests Directly
@@ -194,8 +195,8 @@ In standalone mode, `cagent.yaml` is the sole config source. In connected mode, 
 | `services/warden/routers/domain_policy.py` | Domain policy API for domain lookups |
 | `services/warden/routers/ext_authz.py` | ext_authz endpoint for Envoy credential injection |
 | `docker-compose.yml` | Service definitions |
-| `dev_up.sh` | Dev environment orchestration |
-| `run_tests.sh` | Test runner |
+| `scripts/local.sh` | Dev environment orchestration |
+| `scripts/run_tests.sh` | Test runner |
 
 ## Gotchas
 

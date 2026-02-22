@@ -6,7 +6,7 @@ This guide covers local development setup, testing, and Docker workflows for the
 
 ```bash
 # Standalone with admin UI
-./dev_up.sh
+./scripts/local.sh
 
 # After startup:
 # - Admin UI: http://localhost:8081
@@ -43,8 +43,10 @@ This guide covers local development setup, testing, and Docker workflows for the
 ├── tests/                          # pytest tests
 ├── docs/
 │   └── configuration.md            # Config guide
-├── dev_up.sh                       # Dev environment orchestration
-├── run_tests.sh                    # Test runner
+├── scripts/
+│   ├── local.sh                    # Dev environment orchestration
+│   ├── run_tests.sh                # Test runner
+│   └── seed_traffic.py             # Traffic seeding utility
 └── package.json                    # npm workspace (frontend)
 ```
 
@@ -52,10 +54,10 @@ This guide covers local development setup, testing, and Docker workflows for the
 
 ```bash
 # DP unit/config tests + frontend type-check (default)
-./run_tests.sh
+./scripts/run_tests.sh
 
 # All tests including E2E (requires Docker)
-./run_tests.sh --e2e
+./scripts/run_tests.sh --e2e
 ```
 
 ### DP Tests Directly
@@ -70,7 +72,7 @@ pytest tests/ -v --ignore=tests/test_e2e.py    # unit + config tests
 E2E tests bring up the full data plane stack (cell, proxy, DNS, warden), run tests against it, and tear everything down.
 
 ```bash
-./run_tests.sh --e2e
+./scripts/run_tests.sh --e2e
 ```
 
 Tests include:

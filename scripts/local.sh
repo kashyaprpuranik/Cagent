@@ -6,12 +6,12 @@
 # Starts the data plane in standalone mode for local development.
 #
 # Usage:
-#   ./dev_up.sh                     # Standalone with admin UI (default)
-#   ./dev_up.sh --minimal           # Minimal (no warden, static config)
-#   ./dev_up.sh --gvisor            # Use gVisor runtime
-#   ./dev_up.sh --ssh               # Include SSH tunnel via FRP
-#   ./dev_up.sh --beta              # Enable beta features (email proxy)
-#   ./dev_up.sh down                # Stop everything
+#   ./scripts/local.sh                     # Standalone with admin UI (default)
+#   ./scripts/local.sh --minimal           # Minimal (no warden, static config)
+#   ./scripts/local.sh --gvisor            # Use gVisor runtime
+#   ./scripts/local.sh --ssh               # Include SSH tunnel via FRP
+#   ./scripts/local.sh --beta              # Enable beta features (email proxy)
+#   ./scripts/local.sh down                # Stop everything
 #
 # For full stack (CP + DP), use the cagent-control repo:
 #   cd ../cagent-control && ./dev_up.sh
@@ -21,7 +21,7 @@
 
 set -e
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Defaults
 DP_PROFILES="--profile admin"

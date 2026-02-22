@@ -203,7 +203,7 @@ COPY configs/cell/bin/session /usr/local/bin/session
 RUN chmod +x /usr/local/bin/session
 
 # =============================================================================
-# Seed traffic script (for dev_up.sh log seeding)
+# Seed traffic script (for local.sh log seeding)
 # =============================================================================
 COPY scripts/seed_traffic.py /seed_traffic.py
 

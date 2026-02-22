@@ -4,6 +4,7 @@ import docker
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from constants import docker_client, get_managed_containers
+from utils import async_generator
 
 router = APIRouter()
 
@@ -47,8 +48,8 @@ async def stream_container_logs(websocket: WebSocket, name: str):
     try:
         container = docker_client.containers.get(name)
 
-        # Stream logs
-        for log in container.logs(stream=True, follow=True, timestamps=True, tail=50):
+        # Stream logs (run blocking generator in thread to avoid blocking event loop)
+        async for log in async_generator(container.logs(stream=True, follow=True, timestamps=True, tail=50)):
             try:
                 await websocket.send_text(log.decode("utf-8"))
             except WebSocketDisconnect:

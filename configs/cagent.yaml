@@ -330,14 +330,6 @@ domains:
 #         reads_per_hour: 100
 
 
-  # E2E echo server (added by e2e/run_tests.sh)
-  - domain: echo-server
-    alias: echo
-    credential:
-      header: Authorization
-      format: "Bearer {value}"
-      env: E2E_ECHO_CREDENTIAL
-
 # =============================================================================
 # Internal Services (Docker DNS)
 # =============================================================================

@@ -365,7 +365,10 @@ class ConfigGenerator:
                 if domain.startswith('*.'):
                     actual_host = domain[2:]  # Remove wildcard prefix
 
-                clusters.append(self._generate_cluster(cluster_name, actual_host))
+                # tls defaults to True (HTTPS upstream); set tls: false for HTTP upstreams
+                use_tls = entry.get('tls', True)
+
+                clusters.append(self._generate_cluster(cluster_name, actual_host, tls=use_tls))
 
         # Add email proxy route if email accounts are configured
         email_vhost, email_cluster = self._generate_email_envoy_config()
@@ -491,10 +494,10 @@ class ConfigGenerator:
         name = domain.replace('.', '_').replace('*', 'wildcard').replace('-', '_')
         return name
 
-    def _generate_cluster(self, name: str, host: str, port: int = 443) -> dict:
+    def _generate_cluster(self, name: str, host: str, port: int = 443, tls: bool = True) -> dict:
         """Generate Envoy cluster config."""
         cb = self.get_circuit_breaker_defaults()
-        return {
+        cluster = {
             'name': name,
             'type': 'LOGICAL_DNS',
             'connect_timeout': '10s',
@@ -523,7 +526,9 @@ class ConfigGenerator:
                     }]
                 }]
             },
-            'transport_socket': {
+        }
+        if tls:
+            cluster['transport_socket'] = {
                 'name': 'envoy.transport_sockets.tls',
                 'typed_config': {
                     '@type': 'type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext',
@@ -535,7 +540,7 @@ class ConfigGenerator:
                     }
                 }
             }
-        }
+        return cluster
 
     def _build_envoy_config(self, virtual_hosts: list, clusters: list,
                             default_rate_limit: dict, credential_headers: set) -> dict:

@@ -51,7 +51,7 @@ This repo contains the **data plane** — the secure agent execution environment
 ├── tests/                          # Unit and E2E tests
 ├── scripts/
 │   ├── local.sh                    # Dev environment orchestration
-│   ├── run_tests.sh                # Test runner
+│   ├── test.sh                # Test runner
 │   └── seed_traffic.py             # Traffic seeding utility
 ├── docs/                           # Configuration guide
 ```
@@ -88,10 +88,10 @@ This repo contains the **data plane** — the secure agent execution environment
 
 ```bash
 # DP unit/config tests + frontend type-check (default)
-./scripts/run_tests.sh
+./scripts/test.sh
 
 # All tests including E2E (requires Docker)
-./scripts/run_tests.sh --e2e
+./scripts/test.sh --e2e
 ```
 
 #### DP Tests Directly
@@ -196,7 +196,7 @@ In standalone mode, `cagent.yaml` is the sole config source. In connected mode, 
 | `services/warden/routers/ext_authz.py` | ext_authz endpoint for Envoy credential injection |
 | `docker-compose.yml` | Service definitions |
 | `scripts/local.sh` | Dev environment orchestration |
-| `scripts/run_tests.sh` | Test runner |
+| `scripts/test.sh` | Test runner |
 
 ## Gotchas
 

@@ -45,7 +45,7 @@ This guide covers local development setup, testing, and Docker workflows for the
 │   └── configuration.md            # Config guide
 ├── scripts/
 │   ├── local.sh                    # Dev environment orchestration
-│   ├── run_tests.sh                # Test runner
+│   ├── test.sh                # Test runner
 │   └── seed_traffic.py             # Traffic seeding utility
 └── package.json                    # npm workspace (frontend)
 ```
@@ -54,10 +54,10 @@ This guide covers local development setup, testing, and Docker workflows for the
 
 ```bash
 # DP unit/config tests + frontend type-check (default)
-./scripts/run_tests.sh
+./scripts/test.sh
 
 # All tests including E2E (requires Docker)
-./scripts/run_tests.sh --e2e
+./scripts/test.sh --e2e
 ```
 
 ### DP Tests Directly
@@ -72,7 +72,7 @@ pytest tests/ -v --ignore=tests/test_e2e.py    # unit + config tests
 E2E tests bring up the full data plane stack (cell, proxy, DNS, warden), run tests against it, and tear everything down.
 
 ```bash
-./scripts/run_tests.sh --e2e
+./scripts/test.sh --e2e
 ```
 
 Tests include:

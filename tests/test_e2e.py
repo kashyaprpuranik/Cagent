@@ -63,12 +63,12 @@ def data_plane_running():
     """Verify data plane is running and all services accept connections.
 
     Warden restarts Envoy/CoreDNS on startup (config generation), so
-    even after ``run_tests.sh``'s initial sleep services may still be
+    even after ``test.sh``'s initial sleep services may still be
     coming back up.  Poll from a cell container until connectivity to
     both the proxy and DNS filter is confirmed.
     """
     assert is_data_plane_running(), \
-        "Data plane not running — run_tests.sh should have started it"
+        "Data plane not running — test.sh should have started it"
 
     cell = _discover_cell_container_name()
 
@@ -542,10 +542,10 @@ def get_admin_url():
 
 @pytest.fixture(scope="module")
 def admin_url():
-    """Get local admin URL (guaranteed by run_tests.sh --profile admin)."""
+    """Get local admin URL (guaranteed by test.sh --profile admin)."""
     url = get_admin_url()
     assert url is not None, \
-        "Local admin not running — run_tests.sh should have started it with --profile admin"
+        "Local admin not running — test.sh should have started it with --profile admin"
     return url
 
 

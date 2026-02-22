@@ -2,8 +2,8 @@
 # Run tests for the Cagent data plane.
 #
 # Usage:
-#   ./scripts/run_tests.sh          # DP unit/config + frontend type-check
-#   ./scripts/run_tests.sh --e2e    # All tests including DP e2e
+#   ./scripts/test.sh          # DP unit/config + frontend type-check
+#   ./scripts/test.sh --e2e    # All tests including DP e2e
 
 set -e
 

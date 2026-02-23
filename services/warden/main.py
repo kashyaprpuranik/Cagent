@@ -576,6 +576,7 @@ class _ConfigState:
     def __init__(self):
         self.envoy_hash: Optional[str] = None
         self.corefile_hash: Optional[str] = None
+        self.last_policy_version: Optional[int] = None
 
 _config_state = _ConfigState()
 
@@ -790,10 +791,13 @@ def _heartbeat_and_handle(container):
 
     Runs inside a ThreadPoolExecutor — must be thread-safe.
     Commands take priority over seccomp updates — only one operation per cycle.
+    Returns the policy_version from the heartbeat response (or None).
     """
     response = send_heartbeat(container)
     if not response:
-        return
+        return None
+
+    policy_version = response.get("policy_version")
 
     # Commands take priority — execute and return
     if response.get("command"):
@@ -818,7 +822,7 @@ def _heartbeat_and_handle(container):
             _send_bare_heartbeat(container.name, command, result_str, message)
             with _command_results_lock:
                 _last_command_results.pop(container.name, None)
-        return
+        return policy_version
 
     # No command — check if seccomp profile needs updating
     seccomp_changed = False
@@ -896,6 +900,8 @@ def _heartbeat_and_handle(container):
             except Exception as e:
                 logger.error(f"Failed to restore resource limits on {container.name}: {e}")
             _container_original_resources.pop(container.name, None)
+
+    return policy_version
 
 
 def _check_standalone_seccomp(agents):
@@ -1010,21 +1016,38 @@ def main_loop():
             agents = discover_cell_containers()
 
             # In connected mode, send heartbeat and handle commands per cell (concurrent)
+            policy_version = None
             if DATAPLANE_MODE == "connected" and CONTROL_PLANE_TOKEN:
                 workers = min(MAX_HEARTBEAT_WORKERS, len(agents)) if agents else 1
                 with ThreadPoolExecutor(max_workers=workers) as executor:
                     futures = {executor.submit(_heartbeat_and_handle, c): c for c in agents}
                     for f in as_completed(futures):
                         try:
-                            f.result()
+                            pv = f.result()
+                            # Use the first non-None policy_version (all cells in
+                            # the same tenant share the same version).
+                            if pv is not None and policy_version is None:
+                                policy_version = pv
                         except Exception as exc:
                             container = futures[f]
                             logger.error(f"Heartbeat failed for {container.name}: {exc}")
 
-            # Sync config periodically (wall-clock, not heartbeat-count)
+            # Version-driven config sync: only fetch policies when CP signals a change
             now = time.monotonic()
-            if (now - last_sync_time) >= CONFIG_SYNC_INTERVAL:
+            if policy_version is None:
+                # No Redis on CP or old CP — fall back to interval polling
+                if (now - last_sync_time) >= CONFIG_SYNC_INTERVAL:
+                    sync_config()
+                    last_sync_time = now
+            elif policy_version != _config_state.last_policy_version:
+                logger.info(
+                    f"Policy version changed: {_config_state.last_policy_version} -> {policy_version}, syncing config"
+                )
                 sync_config()
+                # Update last_policy_version ONLY after sync_config succeeds
+                # (configs written and services restarted).  If sync_config
+                # raises, the version stays stale and we retry next heartbeat.
+                _config_state.last_policy_version = policy_version
                 last_sync_time = now
 
             # Standalone mode: check seccomp profile and resource limits from cagent.yaml

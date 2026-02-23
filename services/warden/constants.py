@@ -50,7 +50,7 @@ READ_ONLY = DATAPLANE_MODE == "connected"
 # ---------------------------------------------------------------------------
 # Timing
 # ---------------------------------------------------------------------------
-HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "30"))
+HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "60"))
 CONFIG_SYNC_INTERVAL = int(os.environ.get("CONFIG_SYNC_INTERVAL", "300"))
 MAX_HEARTBEAT_WORKERS = int(os.environ.get("HEARTBEAT_MAX_WORKERS", "20"))
 

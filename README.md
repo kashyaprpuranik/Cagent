@@ -87,22 +87,22 @@ Run with local configuration - ideal for local use of one cell.
 Lightweight setup with just 3 containers. Edit `cagent.yaml` and run the config generator, or edit raw `coredns/Corefile` and `envoy/envoy.yaml` directly for advanced use. Ideal for simple static domain policies on one cell.
 
 ```
-┌───────────────────────────────────────────────────────┐
-│                  cell-net (isolated)                  │
-│                                                        │
-│    ┌────────────────────────────────────────────┐     │
-│    │                    Cell                      │     │
-│    │  • Isolated network (no direct internet)    │     │
-│    │  • All HTTP(S) via HTTP Proxy                │     │
-│    │  • DNS via DNS Filter                       │     │
-│    └────────────────────────────────────────────┘     │
-│                 │                   │                  │
-│                 ▼                   ▼                  │
-│          ┌───────────┐       ┌───────────┐            │
-│          │HTTP Proxy │       │DNS Filter │            │
-│          │  (~50MB)  │       │  (~20MB)  │            │
-│          └───────────┘       └───────────┘            │
-└───────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                 cell-net (isolated)                  │
+│                                                     │
+│  ┌───────────────────────────────────────────────┐  │
+│  │                     Cell                      │  │
+│  │  - Isolated network (no direct internet)      │  │
+│  │  - All HTTP(S) via HTTP Proxy                 │  │
+│  │  - DNS via DNS Filter                         │  │
+│  └───────────────────────────────────────────────┘  │
+│                │                   │                 │
+│                ▼                   ▼                 │
+│         ┌───────────┐       ┌───────────┐           │
+│         │HTTP Proxy │       │DNS Filter │           │
+│         │  (~50MB)  │       │  (~20MB)  │           │
+│         └───────────┘       └───────────┘           │
+└─────────────────────────────────────────────────────┘
 ```
 
 ```bash
@@ -118,27 +118,27 @@ docker compose --profile dev up -d
 Adds warden (watches `cagent.yaml`) and local admin UI for browser-based management and observability. Ideal for complex and changing domain policies on one cell.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         DATA PLANE                               │
-│                                                                  │
-│  ┌──────────────────────────────────────────┐                   │
-│  │        Warden (:8081)              │                   │
-│  │  • Admin UI (config, terminal, logs)     │                   │
-│  │  • Watches cagent.yaml, regenerates      │                   │
-│  │    DNS filter + HTTP proxy configs       │                   │
-│  └──────────────┬───────────────────────────┘                   │
-│                 │                                                │
-│  ┌──────────────┼──────────────────────────────────────────────┐│
-│  │              │          cell-net (isolated)                 ││
-│  │    ┌─────────┴───────────────────────────────────────┐     ││
-│  │    │                       Cell                         │     ││
-│  │    └─────────────────────────────────────────────────┘     ││
-│  │                 │                       │                   ││
-│  │          ┌──────┴──────┐         ┌──────┴──────┐           ││
-│  │          │ HTTP Proxy  │         │ DNS Filter  │           ││
-│  │          └─────────────┘         └─────────────┘           ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                          DATA PLANE                           │
+│                                                               │
+│  ┌──────────────────────────────────────────┐                 │
+│  │       Warden (:8081)                     │                 │
+│  │  - Admin UI (config, terminal, logs)     │                 │
+│  │  - Watches cagent.yaml, regenerates      │                 │
+│  │    DNS filter + HTTP proxy configs       │                 │
+│  └──────────────┬───────────────────────────┘                 │
+│                 │                                              │
+│  ┌──────────────┼──────────────────────────────────────────┐  │
+│  │              │         cell-net (isolated)               │  │
+│  │    ┌─────────┴────────────────────────────────────┐     │  │
+│  │    │                    Cell                       │     │  │
+│  │    └──────────────────────────────────────────────┘     │  │
+│  │                │                       │                 │  │
+│  │         ┌──────┴──────┐         ┌──────┴──────┐         │  │
+│  │         │ HTTP Proxy  │         │ DNS Filter  │         │  │
+│  │         └─────────────┘         └─────────────┘         │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ```bash
@@ -160,31 +160,31 @@ docker compose --profile dev --profile admin up -d
 Adds log collection for standalone deployments. Logs are written to local files by default. Configure S3 or Elasticsearch sinks in `configs/vector/sinks/standalone.yaml` for external shipping.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         DATA PLANE                               │
-│                                                                  │
-│  ┌──────────────────────────┐  ┌──────────────────────────────┐│
-│  │   Warden (:8081)   │  │   Log Shipper               ││
-│  │   admin UI, config sync  │  │   file (default), S3, or ES ││
-│  └──────────────┬───────────┘  └──────────────────────────────┘│
-│                 │                                                │
-│  ┌──────────────┼──────────────────────────────────────────────┐│
-│  │              │          cell-net (isolated)                 ││
-│  │    ┌─────────┴───────────────────────────────────────┐     ││
-│  │    │                       Cell                       │     ││
-│  │    └─────────────────────────────────────────────────┘     ││
-│  │                 │                       │                   ││
-│  │          ┌──────┴──────┐         ┌──────┴──────┐           ││
-│  │          │ HTTP Proxy  │         │ DNS Filter  │           ││
-│  │          └─────────────┘         └─────────────┘           ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                                                                  │
-│  Optional:                                                       │
-│  ┌──────────────────────────────────────────┐                   │
-│  │      Email Proxy (:8025) - beta          │                   │
-│  │  • IMAP/SMTP with per-recipient policy   │                   │
-│  └──────────────────────────────────────────┘                   │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                          DATA PLANE                           │
+│                                                               │
+│  ┌──────────────────────────┐  ┌───────────────────────────┐  │
+│  │   Warden (:8081)         │  │   Log Shipper             │  │
+│  │   admin UI, config sync  │  │   file (default), S3, ES  │  │
+│  └──────────────┬───────────┘  └───────────────────────────┘  │
+│                 │                                              │
+│  ┌──────────────┼──────────────────────────────────────────┐  │
+│  │              │         cell-net (isolated)               │  │
+│  │    ┌─────────┴────────────────────────────────────┐     │  │
+│  │    │                    Cell                       │     │  │
+│  │    └──────────────────────────────────────────────┘     │  │
+│  │                │                       │                 │  │
+│  │         ┌──────┴──────┐         ┌──────┴──────┐         │  │
+│  │         │ HTTP Proxy  │         │ DNS Filter  │         │  │
+│  │         └─────────────┘         └─────────────┘         │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Optional:                                                    │
+│  ┌──────────────────────────────────────────┐                 │
+│  │      Email Proxy (:8025) - beta          │                 │
+│  │  - IMAP/SMTP with per-recipient policy   │                 │
+│  └──────────────────────────────────────────┘                 │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ```bash
@@ -242,6 +242,9 @@ See [docs/configuration.md](docs/configuration.md) for detailed configuration in
 - [ ] Improved secret management in standalone mode (encrypted local storage)
 - [ ] Alert rules for security events (gVisor syscall denials, rate limit hits)
 - [ ] Per-path rate limits and credential injection (path-level policies within a domain)
+- [ ] Content policies (egress body inspection, DLP rules to block sensitive data leaving the cell)
+- [ ] Prompt injection protection (detect and block injected instructions in agent inputs/outputs)
+- [ ] Data loss prevention (classify and redact PII, secrets, and proprietary code at the proxy layer)
 
 ## License
 

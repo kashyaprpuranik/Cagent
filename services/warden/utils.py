@@ -1,5 +1,6 @@
 import asyncio
 from typing import List
+from urllib.parse import urlparse
 
 from fastapi import WebSocket
 
@@ -28,9 +29,9 @@ async def async_generator(sync_generator):
 def validate_websocket_origin(websocket: WebSocket, allowed_origins: List[str]) -> bool:
     """Validate WebSocket origin to prevent CSWSH.
 
-    Allows connection if:
-    1. Origin header matches the Host header (ignoring scheme).
-    2. Origin header is in the explicit allowed_origins list.
+    Allows connection if either of the following conditions is met:
+    1. The Origin header matches the Host header (ignoring scheme).
+    2. The Origin header is explicitly listed in the allowed_origins list.
     """
     origin = websocket.headers.get("origin")
     if not origin:
@@ -47,7 +48,7 @@ def validate_websocket_origin(websocket: WebSocket, allowed_origins: List[str]) 
         return False
 
     # Strip scheme from origin
-    origin_host = origin.split("://")[-1]
+    origin_host = urlparse(origin).netloc
 
     if origin_host == host:
         return True

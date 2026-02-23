@@ -962,7 +962,7 @@ def _check_standalone_resources(agents):
         logger.error(f"Error checking standalone resource limits: {e}")
 
 
-def main_loop():
+def main_loop(stop_event: Optional[threading.Event] = None):
     """Main loop: discover agents, send heartbeats, execute commands, sync config."""
     logger.info("Warden polling loop starting")
     logger.info(f"  Mode: {DATAPLANE_MODE}")
@@ -1004,7 +1004,7 @@ def main_loop():
     # don't cause sync drift.
     last_sync_time = time.monotonic()
 
-    while True:
+    while not (stop_event and stop_event.is_set()):
         try:
             # Discover cell containers each cycle (handles containers
             # being added/removed at runtime)
@@ -1053,8 +1053,11 @@ def main_loop():
         except Exception as e:
             logger.error(f"Error in main loop: {e}")
 
-        # Wait for next cycle
-        time.sleep(HEARTBEAT_INTERVAL)
+        # Wait for next cycle (use stop_event.wait for clean shutdown)
+        if stop_event:
+            stop_event.wait(HEARTBEAT_INTERVAL)
+        else:
+            time.sleep(HEARTBEAT_INTERVAL)
 
 
 # ---------------------------------------------------------------------------
@@ -1064,11 +1067,31 @@ def main_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start the polling loop in a background thread."""
-    loop_thread = threading.Thread(target=main_loop, daemon=True)
+    """Start the polling loop in a resilient background thread.
+
+    The loop auto-restarts on any crash (including BaseException such as
+    KeyboardInterrupt delivered by uvicorn's signal handler to a non-main
+    thread that happens to hold the GIL).
+    """
+    stop_event = threading.Event()
+
+    def _loop_with_restart():
+        while not stop_event.is_set():
+            try:
+                main_loop(stop_event)
+            except Exception:
+                logger.exception("Polling loop crashed, restarting in 5s")
+            except BaseException as exc:
+                # KeyboardInterrupt, SystemExit, etc. — log and restart
+                logger.error("Polling loop killed by %s: %s — restarting in 5s", type(exc).__name__, exc)
+            if not stop_event.is_set():
+                time.sleep(5)
+
+    loop_thread = threading.Thread(target=_loop_with_restart, daemon=True, name="polling-loop")
     loop_thread.start()
     logger.info("Polling loop thread started")
     yield
+    stop_event.set()
 
 
 app = FastAPI(

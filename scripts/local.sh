@@ -9,7 +9,6 @@
 #   ./scripts/local.sh                     # Standalone with admin UI (default)
 #   ./scripts/local.sh --minimal           # Minimal (no warden, static config)
 #   ./scripts/local.sh --gvisor            # Use gVisor runtime
-#   ./scripts/local.sh --ssh               # Include SSH tunnel via FRP
 #   ./scripts/local.sh --beta              # Enable beta features (email proxy)
 #   ./scripts/local.sh down                # Stop everything
 #
@@ -45,10 +44,6 @@ while [[ $# -gt 0 ]]; do
             DP_AGENT_PROFILE="standard"
             shift
             ;;
-        --ssh)
-            DP_PROFILES="$DP_PROFILES --profile ssh"
-            shift
-            ;;
         --beta)
             export BETA_FEATURES="email"
             DP_PROFILES="$DP_PROFILES --profile email"
@@ -64,7 +59,6 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --minimal       Minimal mode (no warden, static config)"
             echo "  --gvisor        Use gVisor runtime (default: runc)"
-            echo "  --ssh           Include SSH tunnel via FRP"
             echo "  --beta          Enable beta features (email proxy)"
             echo ""
             echo "Actions:"
@@ -73,7 +67,7 @@ while [[ $# -gt 0 ]]; do
             echo "Examples:"
             echo "  $0                        # Standalone with admin UI"
             echo "  $0 --minimal              # Minimal (3 containers only)"
-            echo "  $0 --gvisor --ssh         # With gVisor and SSH tunnel"
+            echo "  $0 --gvisor               # With gVisor runtime"
             echo "  $0 down                   # Stop everything"
             echo ""
             echo "For full stack (CP + DP), use the cagent-control repo:"
@@ -99,7 +93,7 @@ cd "$ROOT_DIR"
 # --- Handle 'down' action ---
 if [ "$ACTION" = "down" ]; then
     echo "Stopping Data Plane..."
-    docker compose --profile dev --profile standard --profile admin --profile managed --profile auditing --profile ssh --profile email down --remove-orphans 2>/dev/null || true
+    docker compose --profile dev --profile standard --profile admin --profile managed --profile auditing --profile email down --remove-orphans 2>/dev/null || true
     echo ""
     echo "=== All services stopped ==="
     exit 0

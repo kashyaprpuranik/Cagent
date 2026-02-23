@@ -26,9 +26,6 @@
 #     SSH_AUTHORIZED_KEYS="ssh-ed25519 AAAA..." docker-compose --profile dev up -d
 #     ssh -p 2222 cell@localhost
 #
-#   With SSH tunnel (FRP/STCP for remote access):
-#     docker-compose --profile standard --profile ssh up -d
-#
 # Network Architecture:
 #   cell-net (isolated, internal)
 #     └── cell(s): can ONLY reach http-proxy + dns-filter (dynamic IPs)
@@ -502,51 +499,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-    restart: unless-stopped
-
-  # ===========================================================================
-  # Tunnel Client - Reverse tunnel for SSH access via STCP
-  # Connects outbound to control plane tunnel server
-  # STCP mode: tunneling via FRP server with unique secret key per agent
-  # Optional: Only runs with --profile ssh
-  # ===========================================================================
-  tunnel-client:
-    image: snowdreamtech/frpc:latest
-    container_name: tunnel-client
-    profiles:
-      - ssh
-
-    entrypoint: ["/bin/sh", "/bootstrap/entrypoint.sh"]
-
-    environment:
-      # FRP server auth (must match frps.toml on control plane)
-      - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN:-}
-      # FRP server address (required - e.g. 192.168.1.50)
-      - FRP_SERVER_ADDR=${FRP_SERVER_ADDR:-}
-      - FRP_SERVER_PORT=${FRP_SERVER_PORT:-7000}
-
-    volumes:
-      - ./configs/frpc/entrypoint.sh:/bootstrap/entrypoint.sh:ro
-
-    # On BOTH networks:
-    # - cell-net: to reach cell SSH (uses Docker DNS: cell-dev or cell)
-    # - infra-net: to reach tunnel server (outbound) and warden API
-    networks:
-      cell-net:
-        ipv4_address: 10.200.1.30
-      infra-net:
-        ipv4_address: 10.200.2.30
-
-    healthcheck:
-      test: ["CMD-SHELL", "kill -0 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-    depends_on:
-      - cell
-      - warden
 
     restart: unless-stopped
 

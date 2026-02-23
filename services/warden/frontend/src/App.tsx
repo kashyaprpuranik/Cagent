@@ -1,11 +1,10 @@
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Settings, Container, FileText, Activity, Terminal, MonitorUp, Lock } from 'lucide-react';
+import { Settings, Container, FileText, Activity, MonitorUp, Lock } from 'lucide-react';
 import { getInfo } from './api/client';
 import ConfigPage from './pages/Config';
 import StatusPage from './pages/Status';
 import LogsPage from './pages/Logs';
-import SshTunnelPage from './pages/SshTunnel';
 import TerminalPage from './pages/Terminal';
 
 interface NavItem {
@@ -22,7 +21,6 @@ function Sidebar() {
   });
 
   const isConnected = info?.mode === 'connected';
-  const sshTunnelEnabled = info?.features?.includes('ssh-tunnel');
 
   const navItems: NavItem[] = [
     { to: '/', icon: Activity, label: 'Status' },
@@ -30,7 +28,6 @@ function Sidebar() {
     ...(!isConnected ? [{ to: '/config', icon: Settings, label: 'Config' }] : []),
     { to: '/logs', icon: FileText, label: 'Logs' },
     { to: '/terminal', icon: MonitorUp, label: 'Terminal' },
-    ...(sshTunnelEnabled ? [{ to: '/ssh-tunnel', icon: Terminal, label: 'SSH Tunnel', badge: 'Beta' }] : []),
   ];
 
   return (
@@ -97,7 +94,6 @@ export default function App() {
   });
 
   const isConnected = info?.mode === 'connected';
-  const sshTunnelEnabled = info?.features?.includes('ssh-tunnel');
 
   return (
     <Layout>
@@ -107,7 +103,6 @@ export default function App() {
         <Route path="/config" element={isConnected ? <Navigate to="/" replace /> : <ConfigPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/terminal" element={<TerminalPage />} />
-        <Route path="/ssh-tunnel" element={sshTunnelEnabled ? <SshTunnelPage /> : <Navigate to="/" replace />} />
       </Routes>
     </Layout>
   );

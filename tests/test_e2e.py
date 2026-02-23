@@ -640,15 +640,6 @@ class TestLocalAdminAPI:
             assert "raw" in data
             assert "path" in data
 
-    def test_ssh_tunnel_status(self, admin_url):
-        """Should return SSH tunnel status."""
-        r = requests.get(f"{admin_url}/api/ssh-tunnel", timeout=5)
-        assert r.status_code == 200
-        data = r.json()
-        assert "enabled" in data
-        assert "connected" in data
-        assert "configured" in data
-
     def test_container_logs(self, admin_url, data_plane_running):
         """Should return recent logs for a running container."""
         r = requests.get(
@@ -694,12 +685,6 @@ class TestLocalAdminAPI:
         assert wait_for_container(agent_container_name, timeout=30), (
             f"{agent_container_name} did not recover after restart"
         )
-
-    def test_ssh_tunnel_connect_info_unconfigured(self, admin_url):
-        """Should return 400 when tunnel is not configured."""
-        r = requests.get(f"{admin_url}/api/ssh-tunnel/connect-info", timeout=5)
-        # 400 if STCP_SECRET_KEY is not set, 200 if it happens to be configured
-        assert r.status_code in (200, 400)
 
 
 @pytest.mark.e2e

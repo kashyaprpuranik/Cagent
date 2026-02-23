@@ -162,7 +162,7 @@ export default function LogsPage() {
     staleTime: 30_000,
   });
 
-  const INFRA_NAMES = useMemo(() => new Set(['dns-filter', 'http-proxy', 'email-proxy', 'tunnel-client', 'warden']), []);
+  const INFRA_NAMES = useMemo(() => new Set(['dns-filter', 'http-proxy', 'email-proxy', 'warden']), []);
 
   const containers = useMemo(() => {
     // Discover agent containers dynamically, keep infra containers static

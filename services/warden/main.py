@@ -1088,7 +1088,7 @@ app.add_middleware(
 )
 
 # Register routers
-from routers import analytics, config, containers, domain_policy, ext_authz, health, logs, ssh_tunnel, terminal
+from routers import analytics, config, containers, domain_policy, ext_authz, health, logs, terminal
 
 app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(config.router, prefix="/api", tags=["config"])
@@ -1098,9 +1098,6 @@ app.include_router(terminal.router, prefix="/api", tags=["terminal"])
 app.include_router(analytics.router, prefix="/api", tags=["analytics"])
 app.include_router(domain_policy.router, tags=["domain-policy"])
 app.include_router(ext_authz.router, tags=["ext-authz"])
-app.include_router(ssh_tunnel.router, prefix="/api", tags=["ssh-tunnel"])
-# Always register the tunnel-config proxy (used by FRP entrypoint)
-app.include_router(ssh_tunnel.proxy_router, tags=["tunnel-proxy"])
 
 # =============================================================================
 # Static files (frontend)

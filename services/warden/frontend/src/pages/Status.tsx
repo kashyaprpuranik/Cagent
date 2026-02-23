@@ -132,7 +132,7 @@ function HealthPanel() {
 }
 
 const INFRA_CONTAINERS = new Set([
-  'dns-filter', 'http-proxy', 'email-proxy', 'tunnel-client', 'warden',
+  'dns-filter', 'http-proxy', 'email-proxy', 'warden',
 ]);
 
 function ContainerCard({ container, readOnly }: { container: ContainerInfo; readOnly?: boolean }) {

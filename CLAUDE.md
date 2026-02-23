@@ -131,7 +131,7 @@ npm run lint
 
 - **Framework**: FastAPI with background polling loop (main_loop in separate thread)
 - **Config generation**: `config_generator.py` reads `cagent.yaml` and generates CoreDNS Corefile + Envoy config (with ext_authz + local_ratelimit filters)
-- **Routers**: health, config, containers, logs, terminal, analytics, ssh_tunnel, domain_policy, ext_authz
+- **Routers**: health, config, containers, logs, terminal, analytics, domain_policy, ext_authz
 - **ext_authz endpoint**: Implements Envoy ext_authz HTTP protocol for credential injection (connected: proxy to CP, standalone: resolve from cagent.yaml)
 - **Domain policy API**: Serves domain policy lookups (connected: proxy to CP, standalone: resolve from cagent.yaml)
 - **Beta features**: Gated by `BETA_FEATURES` env var (comma-separated). Currently: `email`
@@ -155,7 +155,7 @@ npm run lint
 
 - **Networks**: `cell-net` (10.200.1.0/24, internal, no external access) and `infra-net` (10.200.2.0/24, can reach external). IPv6 disabled to prevent bypass
 - **Static IPs**: dns-filter=10.200.1.5, http-proxy=10.200.1.10, cell=10.200.1.20
-- **Profiles**: `dev` (runc), `standard` (gVisor), `admin` (admin UI via warden), `managed` (warden without UI), `auditing` (log shipping), `ssh` (FRP tunnel), `email` (email proxy - beta)
+- **Profiles**: `dev` (runc), `standard` (gVisor), `admin` (admin UI via warden), `managed` (warden without UI), `auditing` (log shipping), `email` (email proxy - beta)
 - **Config generation**: `cagent.yaml` is the primary source. In connected mode, warden merges CP domain policies into config generation (see Config Sources below)
 - **Security layers**: Seccomp profile blocks raw sockets, gVisor intercepts syscalls, Envoy enforces domain allowlist/rate limits/path filtering, CoreDNS blocks unauthorized DNS
 - **Vector sinks**: `configs/vector/sinks/standalone.yaml` (file backup + optional S3/ES) or `sinks/connected.yaml` (CP API + file backup), selected via `DATAPLANE_MODE` env var

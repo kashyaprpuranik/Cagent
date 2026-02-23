@@ -152,10 +152,6 @@ docker compose port --index 1 cell-dev 22
 docker compose port --index 2 cell-dev 22
 ```
 
-### Remote SSH (via STCP Tunnel) - Beta
-
-For remote SSH access via STCP tunnel, enable with `BETA_FEATURES=ssh-tunnel` and `--profile ssh`. The tunnel-client self-bootstraps its credentials from the control plane API.
-
 ## Log Collection
 
 In standalone mode with auditing (`--profile auditing`), Vector collects logs from Docker, Envoy, and CoreDNS. Logs are written to local files by default. Configure S3 or Elasticsearch sinks in `configs/vector/sinks/standalone.yaml`.

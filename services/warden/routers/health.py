@@ -10,7 +10,6 @@ from constants import (
     DATA_PLANE_DIR,
     DATAPLANE_MODE,
     ENVOY_CONTAINER_NAME,
-    FRPC_CONTAINER_NAME,
     MANAGED_CONTAINERS,
     docker_client,
 )
@@ -108,6 +107,5 @@ async def info():
             "cell": CELL_CONTAINER_NAME,
             "dns": COREDNS_CONTAINER_NAME,
             "http_proxy": ENVOY_CONTAINER_NAME,
-            "tunnel": FRPC_CONTAINER_NAME,
         },
     }

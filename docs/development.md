@@ -92,7 +92,6 @@ Tests include:
 | `admin` | Warden with admin UI |
 | `managed` | Warden without admin UI (connected mode) |
 | `auditing` | Log shipper (Vector) |
-| `ssh` | FRP tunnel client |
 | `email` | Email proxy (beta) |
 
 ```bash

@@ -154,34 +154,6 @@ export const createLogStream = (name: string): WebSocket => {
   return new WebSocket(`${protocol}//${host}/api/containers/${name}/logs/stream`);
 };
 
-// SSH Tunnel
-export interface SshTunnelStatus {
-  enabled: boolean;
-  connected: boolean;
-  frp_server?: string;
-  frp_server_port?: string;
-  container_status?: string;
-  configured: boolean;
-  control_plane_url?: string;
-  has_cp_token: boolean;
-  has_frp_token: boolean;
-}
-
-export interface SshTunnelConfig {
-  frp_auth_token: string;
-  frp_server_addr?: string;
-  frp_server_port: number;
-}
-
-export interface SshConnectInfo {
-  proxy_name: string;
-  frp_server: string;
-  frp_port: string;
-  secret_key: string;
-  ssh_command: string;
-  visitor_config: string;
-}
-
 // Analytics
 export interface BlockedDomainEntry {
   domain: string;
@@ -248,18 +220,3 @@ export interface DiagnoseResponse {
 export const getDiagnosis = (domain: string) =>
   request<DiagnoseResponse>(`/analytics/diagnose?domain=${encodeURIComponent(domain)}`);
 
-export const getSshTunnelStatus = () => request<SshTunnelStatus>('/ssh-tunnel');
-
-export const configureSshTunnel = (config: SshTunnelConfig) =>
-  request<{ status: string; message: string }>('/ssh-tunnel/configure', {
-    method: 'POST',
-    body: JSON.stringify(config),
-  });
-
-export const startSshTunnel = () =>
-  request<{ status: string; message: string }>('/ssh-tunnel/start', { method: 'POST' });
-
-export const stopSshTunnel = () =>
-  request<{ status: string; message: string }>('/ssh-tunnel/stop', { method: 'POST' });
-
-export const getSshConnectInfo = () => request<SshConnectInfo>('/ssh-tunnel/connect-info');

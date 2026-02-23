@@ -21,7 +21,6 @@ COREDNS_CONTAINER_NAME = "dns-filter"
 ENVOY_CONTAINER_NAME = "http-proxy"
 EMAIL_PROXY_CONTAINER_NAME = "email-proxy"
 WARDEN_CONTAINER_NAME = "warden"
-FRPC_CONTAINER_NAME = "tunnel-client"
 
 # ---------------------------------------------------------------------------
 # Paths

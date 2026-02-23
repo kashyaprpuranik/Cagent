@@ -51,7 +51,3 @@ class ContainerAction(BaseModel):
     action: str  # start, stop, restart
 
 
-class SshTunnelConfig(BaseModel):
-    frp_auth_token: str
-    frp_server_addr: Optional[str] = None  # Default: derived from CONTROL_PLANE_URL
-    frp_server_port: int = 7000

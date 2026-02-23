@@ -49,5 +49,3 @@ class ConfigUpdate(BaseModel):
 
 class ContainerAction(BaseModel):
     action: str  # start, stop, restart
-
-

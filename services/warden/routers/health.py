@@ -33,7 +33,7 @@ async def detailed_health():
     for name in MANAGED_CONTAINERS:
         try:
             container = docker_client.containers.get(name)
-            container.reload()
+            # get() returns fresh attributes; no reload needed
             checks[name] = {
                 "status": "healthy" if container.status == "running" else "unhealthy",
                 "container_status": container.status,

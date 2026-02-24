@@ -9,7 +9,7 @@ router = APIRouter()
 
 
 @router.get("/containers/{name}/logs")
-async def get_container_logs(name: str, tail: int = 100, since: Optional[str] = None):
+def get_container_logs(name: str, tail: int = 100, since: Optional[str] = None):
     """Get container logs."""
     # Restrict access to managed containers only
     if name not in get_managed_containers():

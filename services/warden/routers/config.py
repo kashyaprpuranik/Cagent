@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 @router.get("/config")
-async def get_config():
+def get_config():
     """Get current cagent.yaml configuration."""
     config_path = Path(CAGENT_CONFIG_PATH)
     if not config_path.exists():
@@ -32,7 +32,7 @@ async def get_config():
 
 
 @router.put("/config")
-async def update_config(update: ConfigUpdate):
+def update_config(update: ConfigUpdate):
     """Update cagent.yaml configuration."""
     if READ_ONLY:
         raise HTTPException(403, "Config is read-only in connected mode (managed by control plane)")
@@ -66,7 +66,7 @@ async def update_config(update: ConfigUpdate):
 
 
 @router.put("/config/raw")
-async def update_config_raw(body: dict):
+def update_config_raw(body: dict):
     """Update cagent.yaml with raw YAML content."""
     if READ_ONLY:
         raise HTTPException(403, "Config is read-only in connected mode (managed by control plane)")

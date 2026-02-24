@@ -138,7 +138,7 @@ def _resolve_devbox_alias(domain: str) -> str | None:
 
 
 @router.get("/api/v1/domain-policies/for-domain")
-async def get_domain_policy(
+def get_domain_policy(
     domain: str = Query(..., min_length=1),
     authorization: str | None = Header(default=None),
 ):

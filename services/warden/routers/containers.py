@@ -54,7 +54,7 @@ def get_container_info(name: str) -> dict:
 
 
 @router.get("/containers")
-async def list_containers():
+def list_containers():
     """Get status of all managed containers."""
     containers = {}
 
@@ -65,13 +65,13 @@ async def list_containers():
 
 
 @router.get("/containers/{name}")
-async def get_container(name: str):
+def get_container(name: str):
     """Get status of a specific container."""
     return get_container_info(name)
 
 
 @router.post("/containers/{name}")
-async def control_container(name: str, action: ContainerAction):
+def control_container(name: str, action: ContainerAction):
     """Control a container (start/stop/restart).
 
     Only cell containers may be controlled. Infrastructure containers

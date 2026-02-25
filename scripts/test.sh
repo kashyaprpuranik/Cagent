@@ -18,11 +18,13 @@ for arg in "$@"; do
 done
 
 FAILED=()
+declare -A TIMINGS
 
 # ── DP Unit / Config Tests ──────────────────────────────────────────────────
 echo "=== DP Unit / Config Tests ==="
 echo ""
 cd "$REPO_ROOT"
+start=$SECONDS
 pip install -q -r requirements-test.txt
 if pytest tests/ -v --ignore=tests/test_e2e.py; then
     echo ""
@@ -32,6 +34,7 @@ else
     echo "DP unit/config tests: FAILED"
     FAILED+=("DP unit/config")
 fi
+TIMINGS["DP unit"]=$(( SECONDS - start ))
 echo ""
 
 # ── Frontend Type-Check (tsc) ─────────────────────────────────────────────
@@ -43,18 +46,21 @@ cd "$REPO_ROOT"
 npm install --workspaces --include-workspace-root --silent 2>/dev/null || true
 
 echo "--- DP local admin UI (tsc) ---"
+start=$SECONDS
 if (cd "$REPO_ROOT/services/warden/frontend" && npx tsc --noEmit 2>&1); then
     echo "  DP local admin frontend: OK"
 else
     echo "  DP local admin frontend: FAILED"
     FAILED+=("Frontend type-check")
 fi
+TIMINGS["DP frontend"]=$(( SECONDS - start ))
 echo ""
 
 # ── DP E2E Tests (standalone mode) ──────────────────────────────────────────
 if [ "$RUN_E2E" = true ]; then
     echo "=== DP E2E Tests (standalone mode) ==="
     echo ""
+    start=$SECONDS
 
     cd "$REPO_ROOT"
     CONTAINERS_STARTED=false
@@ -157,14 +163,27 @@ if [ "$RUN_E2E" = true ]; then
         echo ""
         echo "DP e2e tests: PASSED"
     fi
+    TIMINGS["DP e2e"]=$(( SECONDS - start ))
     echo ""
 fi
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo "==========================================="
 if [ ${#FAILED[@]} -eq 0 ]; then
-    echo "All test suites passed."
+    echo "All DP test suites passed."
 else
     echo "FAILED suites: ${FAILED[*]}"
+fi
+echo ""
+echo "Timings:"
+for suite in "DP unit" "DP frontend" "DP e2e"; do
+    if [ -n "${TIMINGS[$suite]+x}" ]; then
+        elapsed=${TIMINGS[$suite]}
+        printf "  %-20s %dm%02ds\n" "$suite" $(( elapsed / 60 )) $(( elapsed % 60 ))
+    fi
+done
+echo "==========================================="
+
+if [ ${#FAILED[@]} -gt 0 ]; then
     exit 1
 fi

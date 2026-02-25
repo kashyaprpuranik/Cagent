@@ -1,6 +1,6 @@
-import sys
 import os
-from unittest.mock import patch, MagicMock
+import sys
+from unittest.mock import MagicMock, patch
 
 # Add services/warden to python path
 sys.path.append(os.path.join(os.getcwd(), "services/warden"))

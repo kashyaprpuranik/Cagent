@@ -26,7 +26,7 @@ echo ""
 cd "$REPO_ROOT"
 start=$SECONDS
 pip install -q -r requirements-test.txt
-if pytest tests/ -v --ignore=tests/test_e2e.py; then
+if pytest tests/ -v -n auto --ignore=tests/test_e2e.py; then
     echo ""
     echo "DP unit/config tests: PASSED"
 else

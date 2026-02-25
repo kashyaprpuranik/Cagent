@@ -10,6 +10,7 @@ from a single local endpoint instead of reaching the control plane directly.
 
 import logging
 import os
+import secrets
 import time
 from pathlib import Path
 
@@ -198,7 +199,8 @@ def get_domain_policy(
     # Authentication check
     is_authenticated = False
     if CONTROL_PLANE_TOKEN and authorization:
-        if authorization == f"Bearer {CONTROL_PLANE_TOKEN}":
+        expected = f"Bearer {CONTROL_PLANE_TOKEN}"
+        if secrets.compare_digest(authorization, expected):
             is_authenticated = True
 
     # Redaction for unauthenticated requests

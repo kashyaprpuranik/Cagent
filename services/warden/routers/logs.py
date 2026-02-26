@@ -100,14 +100,14 @@ async def search_logs(
             start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
             start_us = datetime_to_us(start_dt)
 
-        # Build SQL query
+        # Build SQL query (escape single quotes to prevent SQL injection)
         conditions = []
         if query:
-            conditions.append(f"message LIKE '%{query}%'")
+            conditions.append(f"message LIKE '%{query.replace(chr(39), chr(39) * 2)}%'")
         if source:
-            conditions.append(f"source = '{source}'")
+            conditions.append(f"source = '{source.replace(chr(39), chr(39) * 2)}'")
         if cell_id:
-            conditions.append(f"cell_id = '{cell_id}'")
+            conditions.append(f"cell_id = '{cell_id.replace(chr(39), chr(39) * 2)}'")
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM default{where} ORDER BY _timestamp DESC LIMIT {limit}"

@@ -218,6 +218,43 @@ class TestPolicyEndpoints:
         r = client.post("/api/policies/apply", json={"policies": [{"allowed_paths": ["/"]}]})
         assert r.status_code == 422
 
+    def test_apply_policies_rejects_domain_injection(self):
+        """Domains with newlines/braces/special chars should be rejected."""
+        for bad_domain in [
+            "evil.com\nforward . 8.8.8.8",
+            "evil.com}",
+            "evil.com{",
+            "evil.com; rm -rf /",
+            "evil.com\tevil",
+            "",
+        ]:
+            r = client.post("/api/policies/apply", json={"policies": [{"domain": bad_domain}]})
+            assert r.status_code == 422, f"Domain {bad_domain!r} was not rejected"
+
+    def test_apply_policies_accepts_valid_domains(self):
+        """Valid domain patterns should be accepted."""
+        mock_config = "domains: []\n"
+        with (
+            patch("routers.policies.Path") as mock_path,
+            patch("routers.policies.ConfigGenerator"),
+            patch("routers.policies.docker_client"),
+        ):
+            mock_path_instance = MagicMock()
+            mock_path_instance.read_text.return_value = mock_config
+            mock_path.return_value = mock_path_instance
+
+            r = client.post(
+                "/api/policies/apply",
+                json={
+                    "policies": [
+                        {"domain": "api.github.com"},
+                        {"domain": "*.openai.com"},
+                        {"domain": "my-service_v2.example.com"},
+                    ]
+                },
+            )
+        assert r.status_code == 200
+
 
 # ---------------------------------------------------------------------------
 # Log Search
@@ -307,6 +344,24 @@ class TestLogSearch:
         data = r.json()
         assert data["hits"] == []
         assert data["total"] == 0
+
+    def test_search_logs_escapes_sql_injection(self):
+        """User input with single quotes should be escaped in SQL."""
+        with (
+            patch("openobserve_client.query_openobserve") as mock_query,
+            patch("openobserve_client.now_us", return_value=9999999999),
+        ):
+            mock_query.return_value = []
+            r = client.get(
+                "/api/logs/search",
+                params={"query": "'; DROP TABLE default; --", "source": "x'y"},
+            )
+
+            assert r.status_code == 200
+            sql = mock_query.call_args[0][0]
+            # Single quotes must be doubled, not left raw
+            assert "''; DROP TABLE" in sql
+            assert "source = 'x''y'" in sql
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ Warden applies them by regenerating Envoy + CoreDNS configs.
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -13,11 +14,13 @@ import yaml
 from config_generator import ConfigGenerator
 from constants import CAGENT_CONFIG_PATH, COREDNS_COREFILE_PATH, ENVOY_CONFIG_PATH, docker_client
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9.*\-_]+$")
 
 
 class PolicyEntry(BaseModel):
@@ -26,6 +29,13 @@ class PolicyEntry(BaseModel):
     requests_per_minute: Optional[int] = None
     burst_size: Optional[int] = None
     read_only: Optional[bool] = None
+
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, v: str) -> str:
+        if not v or not _DOMAIN_RE.match(v):
+            raise ValueError(f"Invalid domain format: {v!r}")
+        return v
 
 
 class ApplyPoliciesRequest(BaseModel):

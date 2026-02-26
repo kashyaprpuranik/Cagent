@@ -12,7 +12,7 @@ from constants import OPENOBSERVE_PASSWORD, OPENOBSERVE_URL, OPENOBSERVE_USER
 
 logger = logging.getLogger(__name__)
 
-_STREAM = "cagent-logs"
+_STREAM = "cagent_logs"
 _ORG = "default"
 
 

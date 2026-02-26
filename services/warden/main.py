@@ -46,7 +46,7 @@ from constants import (
     VALID_SECCOMP_PROFILES,
     docker_client,
 )
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -1112,16 +1112,36 @@ app.add_middleware(
 )
 
 # Register routers
-from routers import analytics, config, containers, domain_policy, ext_authz, health, logs, terminal
+from routers import (
+    analytics,
+    commands,
+    config,
+    containers,
+    domain_policy,
+    ext_authz,
+    health,
+    logs,
+    policies,
+    status,
+    terminal,
+)
+from warden_auth import verify_warden_token
 
+# Health and ext_authz are public (no warden token required)
 app.include_router(health.router, prefix="/api", tags=["health"])
-app.include_router(config.router, prefix="/api", tags=["config"])
-app.include_router(containers.router, prefix="/api", tags=["containers"])
-app.include_router(logs.router, prefix="/api", tags=["logs"])
-app.include_router(terminal.router, prefix="/api", tags=["terminal"])
-app.include_router(analytics.router, prefix="/api", tags=["analytics"])
-app.include_router(domain_policy.router, tags=["domain-policy"])
 app.include_router(ext_authz.router, tags=["ext-authz"])
+
+# All other routers require warden token auth (when WARDEN_API_TOKEN is set)
+_auth_deps = [Depends(verify_warden_token)]
+app.include_router(config.router, prefix="/api", tags=["config"], dependencies=_auth_deps)
+app.include_router(containers.router, prefix="/api", tags=["containers"], dependencies=_auth_deps)
+app.include_router(logs.router, prefix="/api", tags=["logs"], dependencies=_auth_deps)
+app.include_router(terminal.router, prefix="/api", tags=["terminal"], dependencies=_auth_deps)
+app.include_router(analytics.router, prefix="/api", tags=["analytics"], dependencies=_auth_deps)
+app.include_router(domain_policy.router, tags=["domain-policy"], dependencies=_auth_deps)
+app.include_router(commands.router, prefix="/api", tags=["commands"], dependencies=_auth_deps)
+app.include_router(status.router, prefix="/api", tags=["status"], dependencies=_auth_deps)
+app.include_router(policies.router, prefix="/api", tags=["policies"], dependencies=_auth_deps)
 
 # =============================================================================
 # Static files (frontend)

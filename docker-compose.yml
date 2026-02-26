@@ -373,6 +373,10 @@ services:
       - CONTROL_PLANE_URL=${CONTROL_PLANE_URL:-}
       - CONTROL_PLANE_TOKEN=${CONTROL_PLANE_TOKEN:-}
       - ENVIRONMENT=${ENVIRONMENT:-development}
+      # Local OpenObserve (used by connected sinks config)
+      - OPENOBSERVE_URL=${OPENOBSERVE_URL:-http://log-store:5080}
+      - OPENOBSERVE_USER=${OPENOBSERVE_USER:-admin@cagent.local}
+      - OPENOBSERVE_PASSWORD=${OPENOBSERVE_PASSWORD:?Set OPENOBSERVE_PASSWORD in env}
 
     command: ["--config", "/etc/vector/vector.yaml", "--config", "/etc/vector/sinks.yaml"]
 
@@ -422,6 +426,12 @@ services:
       - CONTROL_PLANE_TOKEN=${CONTROL_PLANE_TOKEN:-}
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30}
       - CONFIG_SYNC_INTERVAL=${CONFIG_SYNC_INTERVAL:-300}
+      # Interactive mode (CP pushes commands via Cloudflare Tunnel)
+      - WARDEN_API_TOKEN=${WARDEN_API_TOKEN:-}
+      # Local OpenObserve (per-DP log analytics)
+      - OPENOBSERVE_URL=${OPENOBSERVE_URL:-http://log-store:5080}
+      - OPENOBSERVE_USER=${OPENOBSERVE_USER:-admin@cagent.local}
+      - OPENOBSERVE_PASSWORD=${OPENOBSERVE_PASSWORD:?Set OPENOBSERVE_PASSWORD in env}
       # Local admin settings
       - DATA_PLANE_DIR=/app/cagent
 
@@ -450,6 +460,66 @@ services:
 
     networks:
       - infra-net
+
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Log Store - Local OpenObserve instance for per-DP log analytics
+  # Receives logs from Vector, queryable by warden for dashboard analytics
+  # Optional: Only runs with --profile auditing
+  # ===========================================================================
+  log-store:
+    image: public.ecr.aws/zinclabs/openobserve:latest
+    container_name: log-store
+    profiles:
+      - auditing
+
+    environment:
+      - ZO_ROOT_USER_EMAIL=${OPENOBSERVE_USER:-admin@cagent.local}
+      - ZO_ROOT_USER_PASSWORD=${OPENOBSERVE_PASSWORD:?Set OPENOBSERVE_PASSWORD in env}
+      - ZO_COMPACT_DATA_RETENTION_DAYS=${LOG_RETENTION_DAYS:-30}
+      - ZO_DATA_DIR=/data
+
+    volumes:
+      - log-store-data:/data
+
+    networks:
+      - infra-net
+
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Cloudflared - Outbound tunnel to Cloudflare for CP-to-DP communication
+  # Enables interactive mode: CP can push commands, query logs, open terminal
+  # Optional: Only runs with --profile interactive
+  # ===========================================================================
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    profiles:
+      - interactive
+
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+
+    networks:
+      - infra-net
+
+    depends_on:
+      - warden
+
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
     restart: unless-stopped
 
@@ -534,3 +604,4 @@ volumes:
   proxy-config:
   log-shipper-data:
   log-shipper-backup:
+  log-store-data:

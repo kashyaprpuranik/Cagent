@@ -11,7 +11,7 @@ from fastapi import HTTPException, Request
 
 from constants import WARDEN_API_TOKEN
 
-_LOCALHOST_PREFIXES = ("127.", "::1", "10.200.")
+_LOCALHOST_PREFIXES = ("127.", "::1", "10.200.2.")
 
 
 async def verify_warden_token(request: Request):

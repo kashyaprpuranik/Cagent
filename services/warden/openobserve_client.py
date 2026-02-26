@@ -21,7 +21,7 @@ def is_openobserve_healthy() -> bool:
     try:
         resp = requests.get(f"{OPENOBSERVE_URL}/healthz", timeout=3)
         return resp.status_code == 200
-    except Exception:
+    except requests.exceptions.RequestException:
         return False
 
 
@@ -56,7 +56,7 @@ def query_openobserve(sql: str, start_us: int, end_us: int) -> list[dict]:
             return []
         data = resp.json()
         return data.get("hits", [])
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         logger.warning("OO query error: %s", e)
         return []
 

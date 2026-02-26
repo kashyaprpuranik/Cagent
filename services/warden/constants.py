@@ -52,7 +52,7 @@ WARDEN_API_TOKEN = os.environ.get("WARDEN_API_TOKEN", "").strip()
 # Local OpenObserve (per-DP log store)
 OPENOBSERVE_URL = os.environ.get("OPENOBSERVE_URL", "http://log-store:5080")
 OPENOBSERVE_USER = os.environ.get("OPENOBSERVE_USER", "admin@cagent.local")
-OPENOBSERVE_PASSWORD = os.environ.get("OPENOBSERVE_PASSWORD", "admin")
+OPENOBSERVE_PASSWORD = os.environ.get("OPENOBSERVE_PASSWORD", "")
 
 # ---------------------------------------------------------------------------
 # Timing

@@ -21,7 +21,7 @@ sinks:
     auth:
       strategy: basic
       user: "${OPENOBSERVE_USER:-admin@cagent.local}"
-      password: "${OPENOBSERVE_PASSWORD:-admin}"
+      password: "${OPENOBSERVE_PASSWORD}"
     batch:
       max_events: ${VECTOR_BATCH_MAX_EVENTS:-200}
       timeout_secs: ${VECTOR_BATCH_TIMEOUT_SECS:-10}

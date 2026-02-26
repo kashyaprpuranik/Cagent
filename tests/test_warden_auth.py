@@ -51,8 +51,8 @@ class TestWardenAuthLocalhostBypass:
             "127.0.0.1",
             "127.0.0.2",
             "::1",
-            "10.200.1.10",
             "10.200.2.5",
+            "10.200.2.10",
         ],
     )
     def test_local_ips_bypass_auth(self, ip):
@@ -62,6 +62,19 @@ class TestWardenAuthLocalhostBypass:
 
         req = FakeRequest(client_host=ip, auth_header="")
         asyncio.get_event_loop().run_until_complete(verify_warden_token(req))
+
+    def test_cell_net_does_not_bypass_auth(self):
+        """Cell-net IPs (10.200.1.*) must NOT bypass auth — untrusted cells."""
+        from warden_auth import verify_warden_token
+
+        import asyncio
+        from fastapi import HTTPException
+
+        for ip in ("10.200.1.10", "10.200.1.20", "10.200.1.1"):
+            req = FakeRequest(client_host=ip, auth_header="")
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.get_event_loop().run_until_complete(verify_warden_token(req))
+            assert exc_info.value.status_code == 401, f"Cell-net IP {ip} bypassed auth!"
 
     def test_no_client_info_requires_auth(self):
         """If client info is missing, auth should be required."""

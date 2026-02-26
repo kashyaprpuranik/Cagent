@@ -55,7 +55,9 @@ class TestIsOpenObserveHealthy:
 
     @patch("openobserve_client.requests.get")
     def test_connection_error_returns_false(self, mock_get):
-        mock_get.side_effect = ConnectionError("Connection refused")
+        import requests
+
+        mock_get.side_effect = requests.ConnectionError("Connection refused")
         assert is_openobserve_healthy() is False
 
     @patch("openobserve_client.requests.get")
@@ -122,7 +124,9 @@ class TestQueryOpenObserve:
     @patch("openobserve_client.requests.post")
     def test_connection_error_returns_empty(self, mock_post):
         """Network error should return empty list, not raise."""
-        mock_post.side_effect = ConnectionError("OO is down")
+        import requests
+
+        mock_post.side_effect = requests.ConnectionError("OO is down")
         result = query_openobserve("SELECT * FROM default", 0, 1)
         assert result == []
 

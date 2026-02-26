@@ -376,7 +376,7 @@ services:
       # Local OpenObserve (used by connected sinks config)
       - OPENOBSERVE_URL=${OPENOBSERVE_URL:-http://log-store:5080}
       - OPENOBSERVE_USER=${OPENOBSERVE_USER:-admin@cagent.local}
-      - OPENOBSERVE_PASSWORD=${OPENOBSERVE_PASSWORD:-admin}
+      - OPENOBSERVE_PASSWORD=${OPENOBSERVE_PASSWORD:?Set OPENOBSERVE_PASSWORD in env}
 
     command: ["--config", "/etc/vector/vector.yaml", "--config", "/etc/vector/sinks.yaml"]
 
@@ -431,7 +431,7 @@ services:
       # Local OpenObserve (per-DP log analytics)
       - OPENOBSERVE_URL=${OPENOBSERVE_URL:-http://log-store:5080}
       - OPENOBSERVE_USER=${OPENOBSERVE_USER:-admin@cagent.local}
-      - OPENOBSERVE_PASSWORD=${OPENOBSERVE_PASSWORD:-admin}
+      - OPENOBSERVE_PASSWORD=${OPENOBSERVE_PASSWORD:?Set OPENOBSERVE_PASSWORD in env}
       # Local admin settings
       - DATA_PLANE_DIR=/app/cagent
 
@@ -476,7 +476,7 @@ services:
 
     environment:
       - ZO_ROOT_USER_EMAIL=${OPENOBSERVE_USER:-admin@cagent.local}
-      - ZO_ROOT_USER_PASSWORD=${OPENOBSERVE_PASSWORD:-admin}
+      - ZO_ROOT_USER_PASSWORD=${OPENOBSERVE_PASSWORD:?Set OPENOBSERVE_PASSWORD in env}
       - ZO_COMPACT_DATA_RETENTION_DAYS=${LOG_RETENTION_DAYS:-30}
       - ZO_DATA_DIR=/data
 

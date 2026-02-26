@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import docker
 import yaml
 from config_generator import ConfigGenerator
 from constants import CAGENT_CONFIG_PATH, COREDNS_COREFILE_PATH, ENVOY_CONFIG_PATH, docker_client
@@ -90,5 +91,7 @@ def _reload_service(container_name: str, signal: str):
         container = docker_client.containers.get(container_name)
         container.kill(signal=signal)
         logger.info("Sent %s to %s", signal, container_name)
-    except Exception as e:
+    except docker.errors.NotFound:
+        logger.warning("Failed to reload %s: container not found", container_name)
+    except docker.errors.APIError as e:
         logger.warning("Failed to reload %s: %s", container_name, e)

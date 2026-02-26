@@ -60,15 +60,17 @@ async def get_disk():
     for p in partitions:
         try:
             usage = psutil.disk_usage(p.mountpoint)
-            result.append({
-                "path": p.mountpoint,
-                "device": p.device,
-                "fstype": p.fstype,
-                "total_bytes": usage.total,
-                "used_bytes": usage.used,
-                "free_bytes": usage.free,
-                "percent_used": usage.percent,
-            })
+            result.append(
+                {
+                    "path": p.mountpoint,
+                    "device": p.device,
+                    "fstype": p.fstype,
+                    "total_bytes": usage.total,
+                    "used_bytes": usage.used,
+                    "free_bytes": usage.free,
+                    "percent_used": usage.percent,
+                }
+            )
         except (PermissionError, OSError):
             continue
     return {"disks": result}
@@ -81,13 +83,15 @@ async def get_processes():
     for p in psutil.process_iter(["pid", "name", "cpu_percent", "memory_info", "status"]):
         try:
             info = p.info
-            procs.append({
-                "pid": info["pid"],
-                "name": info["name"],
-                "cpu_percent": info["cpu_percent"] or 0,
-                "memory_mb": round((info["memory_info"].rss if info["memory_info"] else 0) / 1024 / 1024, 1),
-                "status": info["status"],
-            })
+            procs.append(
+                {
+                    "pid": info["pid"],
+                    "name": info["name"],
+                    "cpu_percent": info["cpu_percent"] or 0,
+                    "memory_mb": round((info["memory_info"].rss if info["memory_info"] else 0) / 1024 / 1024, 1),
+                    "status": info["status"],
+                }
+            )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     procs.sort(key=lambda x: x["cpu_percent"], reverse=True)
@@ -102,15 +106,17 @@ async def get_network():
     for name, stats in counters.items():
         if name == "lo":
             continue
-        result.append({
-            "interface": name,
-            "bytes_sent": stats.bytes_sent,
-            "bytes_recv": stats.bytes_recv,
-            "packets_sent": stats.packets_sent,
-            "packets_recv": stats.packets_recv,
-            "errin": stats.errin,
-            "errout": stats.errout,
-        })
+        result.append(
+            {
+                "interface": name,
+                "bytes_sent": stats.bytes_sent,
+                "bytes_recv": stats.bytes_recv,
+                "packets_sent": stats.packets_sent,
+                "packets_recv": stats.packets_recv,
+                "errin": stats.errin,
+                "errout": stats.errout,
+            }
+        )
     return {"interfaces": result}
 
 
@@ -122,13 +128,15 @@ async def get_containers():
         try:
             container = docker_client.containers.get(name)
             state = container.attrs.get("State", {})
-            result.append({
-                "name": name,
-                "status": container.status,
-                "image": container.image.tags[0] if container.image.tags else str(container.image.id)[:12],
-                "started_at": state.get("StartedAt"),
-                "health": state.get("Health", {}).get("Status"),
-            })
+            result.append(
+                {
+                    "name": name,
+                    "status": container.status,
+                    "image": container.image.tags[0] if container.image.tags else str(container.image.id)[:12],
+                    "started_at": state.get("StartedAt"),
+                    "health": state.get("Health", {}).get("Status"),
+                }
+            )
         except docker.errors.NotFound:
             result.append({"name": name, "status": "not_found", "image": None, "started_at": None, "health": None})
         except Exception as e:

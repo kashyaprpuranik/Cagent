@@ -1107,8 +1107,7 @@ class TestLogIngestionPipeline:
 
         # Generate traffic through the proxy — the marker appears in the request path
         exec_in_cell(
-            f"curl -s -o /dev/null -x http://10.200.1.10:8443 "
-            f"--connect-timeout 5 http://pypi.org/{marker} || true"
+            f"curl -s -o /dev/null -x http://10.200.1.10:8443 --connect-timeout 5 http://pypi.org/{marker} || true"
         )
 
         # Poll warden search until the marker appears (Vector flush + OO index)
@@ -1360,9 +1359,7 @@ class TestCommandExecution:
         assert r.json()["command"] == "start"
 
         # Verify started
-        assert wait_for_container(agent_container_name, timeout=30), (
-            "Cell did not start after /api/commands/start"
-        )
+        assert wait_for_container(agent_container_name, timeout=30), "Cell did not start after /api/commands/start"
 
 
 # =============================================================================

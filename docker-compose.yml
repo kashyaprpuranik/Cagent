@@ -244,8 +244,9 @@ services:
       - ./configs/coredns:/etc/coredns
     command: ["-conf", "/etc/coredns/Corefile"]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/health || exit 1"]
-      interval: 10s
+      # CoreDNS scratch image has no shell/wget/curl — use the binary itself
+      test: ["CMD", "/coredns", "-plugins"]
+      interval: 30s
       timeout: 5s
       retries: 3
     networks:
@@ -276,8 +277,9 @@ services:
     command: ["-conf", "/etc/coredns/Corefile"]
 
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/health || exit 1"]
-      interval: 10s
+      # CoreDNS scratch image has no shell/wget/curl — use the binary itself
+      test: ["CMD", "/coredns", "-plugins"]
+      interval: 30s
       timeout: 5s
       retries: 3
 

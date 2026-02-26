@@ -7,9 +7,8 @@ Localhost requests (SSH users on the host) bypass auth for convenience.
 When WARDEN_API_TOKEN is empty (standard mode), all requests are allowed.
 """
 
-from fastapi import HTTPException, Request
-
 from constants import WARDEN_API_TOKEN
+from fastapi import HTTPException, Request
 
 _LOCALHOST_PREFIXES = ("127.", "::1", "10.200.2.")
 

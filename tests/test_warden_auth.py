@@ -56,19 +56,19 @@ class TestWardenAuthLocalhostBypass:
         ],
     )
     def test_local_ips_bypass_auth(self, ip):
-        from warden_auth import verify_warden_token
-
         import asyncio
+
+        from warden_auth import verify_warden_token
 
         req = FakeRequest(client_host=ip, auth_header="")
         asyncio.get_event_loop().run_until_complete(verify_warden_token(req))
 
     def test_cell_net_does_not_bypass_auth(self):
         """Cell-net IPs (10.200.1.*) must NOT bypass auth — untrusted cells."""
-        from warden_auth import verify_warden_token
-
         import asyncio
+
         from fastapi import HTTPException
+        from warden_auth import verify_warden_token
 
         for ip in ("10.200.1.10", "10.200.1.20", "10.200.1.1"):
             req = FakeRequest(client_host=ip, auth_header="")
@@ -78,10 +78,10 @@ class TestWardenAuthLocalhostBypass:
 
     def test_no_client_info_requires_auth(self):
         """If client info is missing, auth should be required."""
-        from warden_auth import verify_warden_token
-
         import asyncio
+
         from fastapi import HTTPException
+        from warden_auth import verify_warden_token
 
         req = FakeRequest(client_host="", auth_header="")
         with pytest.raises(HTTPException) as exc_info:
@@ -97,18 +97,18 @@ class TestWardenAuthTokenValidation:
         monkeypatch.setattr("warden_auth.WARDEN_API_TOKEN", "secret-token-123")
 
     def test_valid_token_passes(self):
-        from warden_auth import verify_warden_token
-
         import asyncio
+
+        from warden_auth import verify_warden_token
 
         req = FakeRequest(client_host="203.0.113.50", auth_header="Bearer secret-token-123")
         asyncio.get_event_loop().run_until_complete(verify_warden_token(req))
 
     def test_invalid_token_rejected(self):
-        from warden_auth import verify_warden_token
-
         import asyncio
+
         from fastapi import HTTPException
+        from warden_auth import verify_warden_token
 
         req = FakeRequest(client_host="203.0.113.50", auth_header="Bearer wrong-token")
         with pytest.raises(HTTPException) as exc_info:
@@ -117,10 +117,10 @@ class TestWardenAuthTokenValidation:
         assert "Invalid" in exc_info.value.detail
 
     def test_missing_bearer_prefix_rejected(self):
-        from warden_auth import verify_warden_token
-
         import asyncio
+
         from fastapi import HTTPException
+        from warden_auth import verify_warden_token
 
         req = FakeRequest(client_host="203.0.113.50", auth_header="secret-token-123")
         with pytest.raises(HTTPException) as exc_info:
@@ -128,10 +128,10 @@ class TestWardenAuthTokenValidation:
         assert exc_info.value.status_code == 401
 
     def test_no_auth_header_rejected(self):
-        from warden_auth import verify_warden_token
-
         import asyncio
+
         from fastapi import HTTPException
+        from warden_auth import verify_warden_token
 
         req = FakeRequest(client_host="203.0.113.50", auth_header="")
         with pytest.raises(HTTPException) as exc_info:

@@ -1112,8 +1112,19 @@ app.add_middleware(
 )
 
 # Register routers
-from routers import analytics, config, containers, domain_policy, ext_authz, health, logs, terminal
-from routers import commands, policies, status
+from routers import (
+    analytics,
+    commands,
+    config,
+    containers,
+    domain_policy,
+    ext_authz,
+    health,
+    logs,
+    policies,
+    status,
+    terminal,
+)
 from warden_auth import verify_warden_token
 
 # Health and ext_authz are public (no warden token required)

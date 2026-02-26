@@ -5,8 +5,6 @@ import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # Mock docker before importing warden modules
 sys.modules["docker"] = MagicMock()
 sys.modules["docker"].from_env.return_value = MagicMock(containers=MagicMock(list=MagicMock(return_value=[])))

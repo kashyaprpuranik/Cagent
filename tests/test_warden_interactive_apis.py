@@ -10,9 +10,7 @@ Tests the new endpoints added for interactive mode:
 
 import os
 import sys
-from unittest.mock import MagicMock, mock_open, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 # Mock docker before importing warden modules
 mock_docker = MagicMock()
@@ -24,9 +22,8 @@ mock_docker.containers.list.return_value = []
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "services", "warden")))
 
-from fastapi.testclient import TestClient
-
 import main
+from fastapi.testclient import TestClient
 
 client = TestClient(main.app)
 
@@ -188,7 +185,7 @@ class TestPolicyEndpoints:
         mock_config = "domains:\n  - domain: old.com\n"
         with (
             patch("routers.policies.Path") as mock_path,
-            patch("routers.policies.ConfigGenerator") as mock_gen,
+            patch("routers.policies.ConfigGenerator"),
             patch("routers.policies.docker_client"),
         ):
             mock_path_instance = MagicMock()

@@ -1,9 +1,13 @@
+import logging
+from datetime import datetime
 from typing import Optional
 
 import docker
 from constants import ALLOWED_CORS_ORIGINS, docker_client, get_managed_containers
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from utils import async_generator, validate_websocket_origin
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -67,3 +71,50 @@ async def stream_container_logs(websocket: WebSocket, name: str):
             await websocket.close()
         except Exception:
             pass
+
+
+@router.get("/logs/search")
+async def search_logs(
+    query: str = "",
+    source: Optional[str] = None,
+    cell_id: Optional[str] = None,
+    limit: int = Query(default=100, le=1000),
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+):
+    """Search logs from local OpenObserve.
+
+    Falls back to Docker logs if OO is unavailable.
+    """
+    try:
+        from openobserve_client import datetime_to_us, now_us, query_openobserve
+
+        # Build time range
+        end_us = now_us()
+        start_us = end_us - 6 * 3600 * 1_000_000  # default 6h
+
+        if end:
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            end_us = datetime_to_us(end_dt)
+        if start:
+            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            start_us = datetime_to_us(start_dt)
+
+        # Build SQL query
+        conditions = []
+        if query:
+            conditions.append(f"message LIKE '%{query}%'")
+        if source:
+            conditions.append(f"source = '{source}'")
+        if cell_id:
+            conditions.append(f"cell_id = '{cell_id}'")
+
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM default{where} ORDER BY _timestamp DESC LIMIT {limit}"
+
+        hits = query_openobserve(sql, start_us, end_us)
+        return {"hits": hits, "total": len(hits)}
+
+    except ImportError:
+        logger.debug("OpenObserve client not available, returning empty results")
+        return {"hits": [], "total": 0}

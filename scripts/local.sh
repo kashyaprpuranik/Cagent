@@ -99,6 +99,12 @@ if [ "$ACTION" = "down" ]; then
     exit 0
 fi
 
+# --- Auto-generate OpenObserve password if not set ---
+if [ -z "${OPENOBSERVE_PASSWORD:-}" ]; then
+    export OPENOBSERVE_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
+    echo "Generated OpenObserve password (set OPENOBSERVE_PASSWORD to override)"
+fi
+
 # --- Start services ---
 export DATAPLANE_MODE="standalone"
 

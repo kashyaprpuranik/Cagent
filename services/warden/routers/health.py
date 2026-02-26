@@ -95,6 +95,28 @@ async def detailed_health():
     }
 
 
+@router.get("/health/deep")
+async def deep_health():
+    """Deep health check — verifies all services and local OpenObserve."""
+    result = await detailed_health()
+
+    # Also check local OpenObserve if configured
+    try:
+        from openobserve_client import is_openobserve_healthy
+
+        result["checks"]["openobserve"] = {
+            "status": "healthy" if is_openobserve_healthy() else "unhealthy",
+        }
+    except ImportError:
+        result["checks"]["openobserve"] = {"status": "not_configured"}
+    except Exception as e:
+        result["checks"]["openobserve"] = {"status": "error", "error": str(e)}
+
+    all_healthy = all(c.get("status") == "healthy" for c in result["checks"].values())
+    result["status"] = "healthy" if all_healthy else "degraded"
+    return result
+
+
 @router.get("/info")
 async def info():
     """System info."""

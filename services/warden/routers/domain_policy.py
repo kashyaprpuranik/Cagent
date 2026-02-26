@@ -31,6 +31,31 @@ logger = logging.getLogger(__name__)
 _policy_cache: dict = {}
 _CACHE_TTL = 300  # 5 minutes
 
+# In-memory config cache: {data: dict, mtime: float}
+_config_cache: dict = {"data": {}, "mtime": -1}
+
+
+def _get_standalone_config() -> dict:
+    """Return cached config if mtime matches, else reload from disk."""
+    config_path = Path(CAGENT_CONFIG_PATH)
+    if not config_path.exists():
+        return {}
+
+    try:
+        # Check if file has changed
+        stat = config_path.stat()
+        mtime = stat.st_mtime
+
+        if _config_cache["mtime"] != mtime:
+            _config_cache["data"] = yaml.safe_load(config_path.read_text()) or {}
+            _config_cache["mtime"] = mtime
+            logger.debug(f"Reloaded cagent.yaml cache (mtime={mtime})")
+
+        return _config_cache["data"]
+    except Exception as e:
+        logger.error(f"Failed to load cagent.yaml: {e}")
+        return {}
+
 
 def _cache_get(domain: str):
     """Return cached policy if still valid, else None."""
@@ -51,17 +76,14 @@ def _cache_set(domain: str, response: dict):
 def invalidate_cache():
     """Clear the policy cache (called when config is regenerated)."""
     _policy_cache.clear()
+    _config_cache["data"] = {}
+    _config_cache["mtime"] = -1
 
 
 def _build_standalone_policy(domain: str) -> dict:
     """Build a policy response from cagent.yaml for standalone mode."""
-    config_path = Path(CAGENT_CONFIG_PATH)
-    if not config_path.exists():
-        return {"matched": False, "domain": domain}
-
-    try:
-        config = yaml.safe_load(config_path.read_text()) or {}
-    except Exception:
+    config = _get_standalone_config()
+    if not config:
         return {"matched": False, "domain": domain}
 
     domains = config.get("domains", [])

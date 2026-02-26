@@ -8,6 +8,7 @@ When WARDEN_API_TOKEN is empty (standard mode), all requests are allowed.
 """
 
 import secrets
+
 from constants import WARDEN_API_TOKEN
 from fastapi import HTTPException, Request
 

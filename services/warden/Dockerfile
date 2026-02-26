@@ -38,7 +38,8 @@ RUN pip install --no-cache-dir \
     "requests>=2.32.0,<3" \
     pyyaml==6.0.1 \
     websockets==12.0 \
-    pydantic>=2.0.0
+    pydantic>=2.0.0 \
+    psutil>=5.9.0
 
 # Copy warden code
 COPY services/warden/ /app/

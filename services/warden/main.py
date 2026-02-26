@@ -720,15 +720,16 @@ def sync_config() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _send_bare_heartbeat(cell_name: str, command: str, result: str, message: str):
-    """Send a heartbeat without a live container (e.g., after wipe).
+def _send_bare_heartbeat(cell_name: str, command: str, result: str, message: str, status: str = "removed"):
+    """Send a heartbeat without a live container (e.g., after wipe/stop).
 
-    Used to report command results when the container no longer exists.
+    Used to report command results immediately without waiting for the next
+    heartbeat cycle.
     """
     if not CONTROL_PLANE_URL or not CONTROL_PLANE_TOKEN:
         return
     heartbeat = {
-        "status": "removed",
+        "status": status,
         "last_command": command,
         "last_command_result": result,
         "last_command_message": message,
@@ -830,9 +831,16 @@ def _heartbeat_and_handle(container):
             }
         logger.info(f"Command {command} on {container.name} {'succeeded' if success else 'failed'}: {message}")
         # Wipe removes the container, so it won't be discovered next cycle.
-        # Send the result immediately via a bare heartbeat.
+        # Stop leaves the container in "exited" state — next heartbeat cycle
+        # would work but container.stop(timeout=10) can block for up to 10s,
+        # making the round-trip too slow for tight e2e timeouts.
+        # Send the result immediately via a bare heartbeat for both.
         if command == "wipe":
             _send_bare_heartbeat(container.name, command, result_str, message)
+            with _command_results_lock:
+                _last_command_results.pop(container.name, None)
+        elif command == "stop":
+            _send_bare_heartbeat(container.name, command, result_str, message, status="exited")
             with _command_results_lock:
                 _last_command_results.pop(container.name, None)
         return policy_version

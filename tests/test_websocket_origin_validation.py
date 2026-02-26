@@ -44,10 +44,10 @@ class TestWebSocketOriginValidation(unittest.TestCase):
         self.assertFalse(validate_websocket_origin(mock_ws, self.allowed_origins))
 
     def test_missing_origin(self):
-        """Should deny if Origin header is missing."""
+        """Non-browser clients omit Origin; allow them (not vulnerable to CSWSH)."""
         mock_ws = Mock()
         mock_ws.headers = {"host": "localhost:8080"}
-        self.assertFalse(validate_websocket_origin(mock_ws, self.allowed_origins))
+        self.assertTrue(validate_websocket_origin(mock_ws, self.allowed_origins))
 
     def test_missing_host(self):
         """Should deny if Host header is missing (unless Origin is in allowlist)."""

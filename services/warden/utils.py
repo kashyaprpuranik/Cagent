@@ -35,8 +35,9 @@ def validate_websocket_origin(websocket: WebSocket, allowed_origins: List[str]) 
     """
     origin = websocket.headers.get("origin")
     if not origin:
-        # Browsers always send Origin. Require it for security.
-        return False
+        # Non-browser clients (CLI, tests, programmatic APIs) don't send
+        # Origin and aren't vulnerable to CSWSH.  Allow them through.
+        return True
 
     # Check explicit allowlist
     if origin in allowed_origins:

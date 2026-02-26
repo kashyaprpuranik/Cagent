@@ -1066,8 +1066,16 @@ class TestDeepHealth:
         data = r.json()
         assert "checks" in data
         assert "openobserve" in data["checks"]
-        # OO should be healthy if auditing profile is running
+        # OO should be healthy if auditing profile is running.
+        # OpenObserve can take a while to start up, so poll until healthy.
         if is_openobserve_running():
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                r = requests.get(f"{admin_url}/api/health/deep", timeout=10)
+                data = r.json()
+                if data["checks"]["openobserve"]["status"] == "healthy":
+                    break
+                time.sleep(2)
             assert data["checks"]["openobserve"]["status"] == "healthy"
 
     def test_deep_health_superset_of_detailed(self, admin_url, data_plane_running):

@@ -79,8 +79,8 @@ async def apply_policies(body: ApplyPoliciesRequest):
     # Regenerate configs
     try:
         generator = ConfigGenerator(str(config_path))
-        generator.generate_corefile(COREDNS_COREFILE_PATH)
-        generator.generate_envoy_config(ENVOY_CONFIG_PATH)
+        generator.load_config()
+        generator.generate_all(COREDNS_COREFILE_PATH, ENVOY_CONFIG_PATH)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Config generation failed: {e}")
 

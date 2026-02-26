@@ -486,6 +486,11 @@ def execute_command(command: str, container, args: Optional[dict] = None) -> tup
         elif command == "wipe":
             wipe_workspace = args.get("wipe_workspace", False) if args else False
 
+            # Capture config before removing so we can recreate
+            from routers.commands import _capture_container_config, _recreate_container
+
+            create_kwargs = _capture_container_config(container)
+
             # Stop and remove container
             if container.status == "running":
                 container.stop(timeout=10)
@@ -506,7 +511,15 @@ def execute_command(command: str, container, args: Optional[dict] = None) -> tup
                     except Exception as e:
                         logger.warning(f"Could not wipe workspace for {name}: {e}")
 
-            return True, f"Agent {name} wiped (workspace={'wiped' if wipe_workspace else 'preserved'})"
+            # Recreate the container with the same config
+            try:
+                new_container = _recreate_container(create_kwargs)
+                logger.info(f"Recreated container {name} as {new_container.short_id}")
+            except Exception as e:
+                logger.error(f"Failed to recreate container {name}: {e}")
+                return True, f"Agent {name} wiped but recreation failed: {e}"
+
+            return True, f"Agent {name} wiped and recreated (workspace={'wiped' if wipe_workspace else 'preserved'})"
 
         else:
             return False, f"Unknown command: {command}"

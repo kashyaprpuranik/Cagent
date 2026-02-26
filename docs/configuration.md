@@ -154,6 +154,15 @@ docker compose port --index 2 cell-dev 22
 
 ## Log Collection
 
-In standalone mode with auditing (`--profile auditing`), Vector collects logs from Docker, Envoy, and CoreDNS. Logs are written to local files by default. Configure S3 or Elasticsearch sinks in `configs/vector/sinks/standalone.yaml`.
+Enabled with `--profile auditing`. Vector collects logs from all containers (cell, HTTP proxy, DNS filter, warden) and ships them to:
 
-In connected mode, logs are shipped to the control plane API. See [cagent-control](https://github.com/kashyaprpuranik/cagent-control) for log querying.
+| Sink | Standalone | Connected | Notes |
+|------|-----------|-----------|-------|
+| **OpenObserve** (local log store) | Yes | Yes | Per-DP log analytics, queryable by warden for the traffic dashboard |
+| **Local files** | Yes | Yes (backup) | `/var/log/vector/backup/%Y-%m-%d.log` |
+| **S3** | Optional | — | Uncomment in `configs/vector/sinks/standalone.yaml` |
+| **Elasticsearch** | Optional | — | Uncomment in `configs/vector/sinks/standalone.yaml` |
+
+**OpenObserve** runs as the `log-store` container on `infra-net` (not exposed externally). Warden queries it for the admin UI analytics dashboard (top blocked domains, bandwidth, error rates). Default retention is 30 days (`LOG_RETENTION_DAYS` env var).
+
+In connected mode, the control plane queries logs by proxying requests through warden (via Cloudflare Tunnel for interactive tenants).

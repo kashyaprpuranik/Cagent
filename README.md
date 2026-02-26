@@ -157,38 +157,40 @@ docker compose --profile dev --profile admin up -d
 
 #### Locally Managed with Auditing
 
-Adds log collection for standalone deployments. Logs are written to local files by default. Configure S3 or Elasticsearch sinks in `configs/vector/sinks/standalone.yaml` for external shipping.
+Adds log collection and a local log store for standalone deployments. Vector collects logs from all containers and ships them to OpenObserve (local log analytics) and local files. The warden queries OpenObserve for the traffic analytics dashboard. Configure additional sinks (S3, Elasticsearch) in `configs/vector/sinks/standalone.yaml`.
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│                          DATA PLANE                           │
-│                                                               │
-│  ┌──────────────────────────┐  ┌───────────────────────────┐  │
-│  │   Warden (:8081)         │  │   Log Shipper             │  │
-│  │   admin UI, config sync  │  │   file (default), S3, ES  │  │
-│  └──────────────┬───────────┘  └───────────────────────────┘  │
-│                 │                                              │
-│  ┌──────────────┼──────────────────────────────────────────┐  │
-│  │              │         cell-net (isolated)               │  │
-│  │    ┌─────────┴────────────────────────────────────┐     │  │
-│  │    │                    Cell                       │     │  │
-│  │    └──────────────────────────────────────────────┘     │  │
-│  │                │                       │                 │  │
-│  │         ┌──────┴──────┐         ┌──────┴──────┐         │  │
-│  │         │ HTTP Proxy  │         │ DNS Filter  │         │  │
-│  │         └─────────────┘         └─────────────┘         │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│                                                               │
-│  Optional:                                                    │
-│  ┌──────────────────────────────────────────┐                 │
-│  │      Email Proxy (:8025) - beta          │                 │
-│  │  - IMAP/SMTP with per-recipient policy   │                 │
-│  └──────────────────────────────────────────┘                 │
-└───────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                           DATA PLANE                               │
+│                                                                    │
+│  ┌──────────────────────────┐  ┌────────────┐  ┌───────────────┐  │
+│  │   Warden (:8081)         │  │Log Shipper │  │  Log Store    │  │
+│  │   admin UI, config sync  │  │  (Vector)  │─►│ (OpenObserve) │  │
+│  │                          │  │            │  │  30d retention │  │
+│  │   queries log store ────────────────────────►│               │  │
+│  └──────────────┬───────────┘  │  also ──►file │  │  │
+│                 │              └────────────┘  └───────────────┘  │
+│  ┌──────────────┼──────────────────────────────────────────────┐  │
+│  │              │         cell-net (isolated)                   │  │
+│  │    ┌─────────┴────────────────────────────────────┐         │  │
+│  │    │                    Cell                       │         │  │
+│  │    └──────────────────────────────────────────────┘         │  │
+│  │                │                       │                     │  │
+│  │         ┌──────┴──────┐         ┌──────┴──────┐             │  │
+│  │         │ HTTP Proxy  │         │ DNS Filter  │             │  │
+│  │         └─────────────┘         └─────────────┘             │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+│  Optional:                                                         │
+│  ┌──────────────────────────────────────────┐                      │
+│  │      Email Proxy (:8025) - beta          │                      │
+│  │  - IMAP/SMTP with per-recipient policy   │                      │
+│  └──────────────────────────────────────────┘                      │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 ```bash
-# With auditing (log collection to local files)
+# With auditing (log collection + local log store)
 docker compose --profile dev --profile admin --profile auditing up -d
 
 # With email proxy (beta)
@@ -213,6 +215,59 @@ Cells are named `cagent-cell-dev-1`, `cagent-cell-dev-2`, etc. All share the sam
 | **Web Terminal** | http://localhost:8081 (admin UI) |
 | **Docker exec** | `docker exec -it cell bash` |
 | **SSH** | Direct SSH to port 2222 (configure via admin UI) |
+
+### Connected Mode
+
+For centralized management of multiple data planes, connect to a [control plane](https://github.com/kashyaprpuranik/cagent-control). Connected mode adds:
+
+- **Centralized policy management** — domain policies, security profiles, and credentials managed from a single admin UI
+- **Multi-tenant isolation** — multiple teams share one control plane with full tenant isolation
+- **Remote cell management** — start, stop, restart, and wipe cells from the control plane
+- **Centralized log querying** — the control plane queries each DP's local OpenObserve via warden for traffic analytics
+- **OAuth authentication** — GitHub/Google login, API tokens, and IP ACL enforcement
+
+```
+                                  ┌──────────────────────────────┐
+                                  │        Control Plane          │
+                                  │                               │
+                                  │  Admin UI ── API ── Postgres  │
+                                  │               │               │
+                                  └───────────────┼───────────────┘
+                                                  │
+                          heartbeat/poll (outbound)│log queries (inbound
+                          config sync              │  via Cloudflare Tunnel)
+                                                  │
+┌─────────────────────────────────────────────────┼──────────────────┐
+│                         DATA PLANE              │                   │
+│                                                 │                   │
+│  ┌──────────────────────────┐                   │                   │
+│  │   Warden                 │◄──────────────────┘                   │
+│  │   config sync, heartbeat │                                       │
+│  │                          │  ┌────────────┐  ┌───────────────┐   │
+│  │   queries log store ───────────────────────►│  Log Store    │   │
+│  │                          │  │Log Shipper │─►│ (OpenObserve) │   │
+│  └──────────────┬───────────┘  │  (Vector)  │  │  30d retention │   │
+│                 │              │  also ──►file │               │   │
+│  ┌──────────────┼─────────────┘────────────┘  └───────────────┘   │
+│  │              │         cell-net (isolated)                       │
+│  │    ┌─────────┴────────────────────────────────────┐             │
+│  │    │                    Cell                       │             │
+│  │    └──────────────────────────────────────────────┘             │
+│  │                │                       │                         │
+│  │         ┌──────┴──────┐         ┌──────┴──────┐                 │
+│  │         │ HTTP Proxy  │         │ DNS Filter  │                 │
+│  │         └─────────────┘         └─────────────┘                 │
+│  └─────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────┘
+```
+
+All connections from DP to CP are outbound — no inbound ports needed on the data plane. Log queries from the CP to warden use a Cloudflare Tunnel (interactive tenants only).
+
+```bash
+# Connected mode
+CONTROL_PLANE_URL=https://api.example.com CONTROL_PLANE_TOKEN=your-agent-token \
+docker compose --profile dev --profile managed --profile auditing up -d
+```
 
 ## Features
 

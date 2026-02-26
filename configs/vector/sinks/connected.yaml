@@ -14,7 +14,7 @@ sinks:
       - parse_docker
       - parse_gvisor
       - parse_cell_app
-    uri: "${OPENOBSERVE_URL:-http://log-store:5080}/api/default/logs/_json"
+    uri: "${OPENOBSERVE_URL:-http://log-store:5080}/api/default/cagent_logs/_json"
     method: post
     encoding:
       codec: json

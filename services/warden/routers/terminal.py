@@ -1,4 +1,5 @@
 import asyncio
+import json
 import socket
 
 import docker
@@ -29,6 +30,18 @@ def _get_raw_socket(sock):
 
     # Last resort: use whatever we got
     return sock
+
+
+@router.websocket("/terminal")
+async def web_terminal_default(websocket: WebSocket):
+    """Interactive terminal session — auto-selects the first cell container."""
+    containers = discover_cell_container_names()
+    if not containers:
+        await websocket.accept()
+        await websocket.send_text("\r\nNo cell containers found.\r\n")
+        await websocket.close()
+        return
+    await web_terminal(websocket, containers[0])
 
 
 @router.websocket("/terminal/{name}")
@@ -99,6 +112,17 @@ async def web_terminal(websocket: WebSocket, name: str):
             while True:
                 try:
                     data = await websocket.receive_text()
+                    # Detect JSON resize messages from the frontend
+                    if data.startswith("{"):
+                        try:
+                            msg = json.loads(data)
+                            if msg.get("type") == "resize":
+                                cols = int(msg.get("cols", 80))
+                                rows = int(msg.get("rows", 24))
+                                docker_client.api.exec_resize(exec_id["Id"], height=rows, width=cols)
+                                continue
+                        except (json.JSONDecodeError, ValueError, KeyError):
+                            pass  # Not a resize message — send as normal input
                     raw_sock.sendall(data.encode("utf-8"))
                 except WebSocketDisconnect:
                     break

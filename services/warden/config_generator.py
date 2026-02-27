@@ -595,6 +595,17 @@ class ConfigGenerator:
                     }
                 ]
             },
+            "overload_manager": {
+                "resource_monitors": [
+                    {
+                        "name": "envoy.resource_monitors.downstream_connections",
+                        "typed_config": {
+                            "@type": "type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig",
+                            "max_active_downstream_connections": 1000,
+                        },
+                    }
+                ]
+            },
         }
 
     def _build_control_plane_cluster(self) -> dict:
@@ -693,6 +704,13 @@ class ConfigGenerator:
             "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz",
                 "transport_api_version": "V3",
+                "allowed_headers": {
+                    "patterns": [
+                        {"exact": ":authority"},
+                        {"exact": ":method"},
+                        {"exact": ":path"},
+                    ]
+                },
                 "http_service": {
                     "server_uri": {
                         "uri": "warden:8080",
@@ -700,15 +718,6 @@ class ConfigGenerator:
                         "timeout": "5s",
                     },
                     "path_prefix": "/api/v1/ext-authz",
-                    "authorization_request": {
-                        "allowed_headers": {
-                            "patterns": [
-                                {"exact": ":authority"},
-                                {"exact": ":method"},
-                                {"exact": ":path"},
-                            ]
-                        }
-                    },
                     "authorization_response": {"allowed_upstream_headers": {"patterns": upstream_patterns}},
                 },
                 "failure_mode_allow": True,

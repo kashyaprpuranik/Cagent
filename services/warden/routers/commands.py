@@ -5,11 +5,13 @@ in the DB for the next heartbeat poll.
 """
 
 import logging
+from typing import Optional
 
 import docker
 from constants import docker_client
 from fastapi import APIRouter, HTTPException
 from main import discover_cell_containers
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,6 @@ def _capture_container_config(container) -> dict:
     image = config.get("Image")
     env = config.get("Env", [])
     labels = dict(config.get("Labels", {}))
-    binds = host_config.get("Binds", [])
     dns = host_config.get("Dns", [])
     cap_drop = host_config.get("CapDrop", [])
     security_opt = host_config.get("SecurityOpt", [])
@@ -48,15 +49,27 @@ def _capture_container_config(container) -> dict:
     mem_reservation = host_config.get("MemoryReservation")
     log_config = host_config.get("LogConfig", {})
 
-    # Named volume mounts
+    # Use attrs.Mounts as the single source of truth for ALL mount types.
+    # This avoids duplicates when HostConfig.Binds and attrs.Mounts overlap
+    # for named volumes, which causes Docker to reject the create() call.
     mounts = []
     for mount in attrs.get("Mounts", []):
-        if mount.get("Type", "volume") == "volume":
+        mount_type = mount.get("Type", "volume")
+        if mount_type == "volume":
             mounts.append(
                 docker.types.Mount(
                     target=mount["Destination"],
                     source=mount["Name"],
                     type="volume",
+                    read_only=not mount.get("RW", True),
+                )
+            )
+        elif mount_type == "bind":
+            mounts.append(
+                docker.types.Mount(
+                    target=mount["Destination"],
+                    source=mount["Source"],
+                    type="bind",
                     read_only=not mount.get("RW", True),
                 )
             )
@@ -75,8 +88,6 @@ def _capture_container_config(container) -> dict:
         create_kwargs["cap_drop"] = cap_drop
     if security_opt:
         create_kwargs["security_opt"] = security_opt
-    if binds:
-        create_kwargs["volumes"] = binds
     if mounts:
         create_kwargs["mounts"] = mounts
     if restart_policy:
@@ -152,26 +163,115 @@ async def start_cell():
         raise HTTPException(status_code=500, detail=f"Start failed: {e}")
 
 
+def _get_workspace_mount(container) -> Optional[dict]:
+    """Return the /workspace mount info from container attrs, or None."""
+    container.reload()
+    for mount in container.attrs.get("Mounts", []):
+        if mount.get("Destination") == "/workspace":
+            return mount
+    return None
+
+
+def _wipe_workspace(container) -> None:
+    """Clear the /workspace contents.  Container must be stopped.
+
+    Handles both mount types:
+    - Named volume: remove and recreate (atomic, no image needed)
+    - Bind mount: run a throwaway container using the cell's own image
+      to ``find -delete`` the contents (handles dotfiles)
+    """
+    mount = _get_workspace_mount(container)
+    if not mount:
+        logger.warning("No /workspace mount found on %s — skipping workspace wipe", container.name)
+        return
+
+    mount_type = mount.get("Type", "volume")
+
+    if mount_type == "volume":
+        vol_name = mount["Name"]
+        logger.info("Wiping workspace: removing and recreating volume %s", vol_name)
+        docker_client.volumes.get(vol_name).remove()
+        docker_client.volumes.create(vol_name)
+
+    elif mount_type == "bind":
+        source = mount["Source"]
+        image = container.attrs.get("Config", {}).get("Image")
+        logger.info("Wiping workspace: clearing bind mount %s using image %s", source, image)
+        docker_client.containers.run(
+            image,
+            command="find /workspace -mindepth 1 -delete",
+            volumes={source: {"bind": "/workspace", "mode": "rw"}},
+            remove=True,
+            network_disabled=True,
+        )
+
+    else:
+        logger.warning("Unknown mount type %s for /workspace on %s — skipping", mount_type, container.name)
+        return
+
+    logger.info("Workspace wiped for %s", container.name)
+
+
+class WipeRequest(BaseModel):
+    wipe_workspace: bool = False
+
+
 @router.post("/commands/wipe")
-async def wipe_cell():
+async def wipe_cell(body: Optional[WipeRequest] = None):
     """Stop, remove, and recreate the cell container with fresh filesystem.
 
     Preserves all container infrastructure config (env, volumes, mounts,
     DNS, capabilities, security options, networks, resource limits).
+
+    If wipe_workspace is true, the workspace volume is cleared before
+    recreating the container.
+
+    Uses atomic rename pattern: the old container is renamed (not removed)
+    before creating the new one.  If recreation fails the old container is
+    restored so the cell is never left permanently dead.
     """
+    wipe_workspace = body.wipe_workspace if body else False
     container = _get_cell_container()
     name = container.name
     try:
         create_kwargs = _capture_container_config(container)
 
+        # Stop but don't remove yet — keep as rollback target
         container.stop(timeout=10)
-        container.remove(force=True)
+        temp_name = f"{name}__old"
+        container.rename(temp_name)
 
-        new_container = _recreate_container(create_kwargs)
+        # Wipe workspace while old container is stopped (volume not in use)
+        if wipe_workspace:
+            try:
+                _wipe_workspace(container)
+            except Exception as e:
+                logger.error("Workspace wipe failed for %s: %s", name, e)
+                # Rollback: restore old container — don't leave the cell
+                # with a partially wiped workspace and no running container
+                container.rename(name)
+                container.start()
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Workspace wipe failed: {e}",
+                )
+
+        try:
+            new_container = _recreate_container(create_kwargs)
+        except Exception:
+            # Rollback: restore old container
+            container.rename(name)
+            container.start()
+            raise
+
+        # Success — remove old container
+        container.remove(force=True)
         return {
             "status": "completed",
             "command": "wipe",
-            "message": f"Container {name} wiped and recreated as {new_container.short_id}",
+            "message": f"Container {name} wiped and recreated as {new_container.short_id} (workspace={'wiped' if wipe_workspace else 'preserved'})",
         }
+    except HTTPException:
+        raise
     except docker.errors.APIError as e:
         raise HTTPException(status_code=500, detail=f"Wipe failed: {e}")

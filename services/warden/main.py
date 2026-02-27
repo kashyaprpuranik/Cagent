@@ -104,14 +104,6 @@ def discover_cell_containers() -> List:
         return []
 
 
-def _workspace_volume_for(container) -> Optional[str]:
-    """Derive the workspace volume name for a container from its mounts."""
-    for mount in container.attrs.get("Mounts", []):
-        if mount.get("Destination") == "/workspace":
-            return mount.get("Name")
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Seccomp profile management
 # ---------------------------------------------------------------------------
@@ -193,10 +185,9 @@ def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
         # Update labels with new seccomp profile
         old_labels["cagent.seccomp_profile"] = profile_name
 
-        # Volumes/Binds
-        binds = host_config.get("Binds", [])
-
-        # Mounts (named volumes)
+        # Use attrs.Mounts as the single source of truth for ALL mount types.
+        # This avoids duplicates when HostConfig.Binds and attrs.Mounts overlap
+        # for named volumes, which causes Docker to reject the create() call.
         mounts = []
         for mount in attrs.get("Mounts", []):
             mount_type = mount.get("Type", "volume")
@@ -206,6 +197,15 @@ def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
                         target=mount["Destination"],
                         source=mount["Name"],
                         type="volume",
+                        read_only=not mount.get("RW", True),
+                    )
+                )
+            elif mount_type == "bind":
+                mounts.append(
+                    docker.types.Mount(
+                        target=mount["Destination"],
+                        source=mount["Source"],
+                        type="bind",
                         read_only=not mount.get("RW", True),
                     )
                 )
@@ -237,10 +237,11 @@ def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
         # Networks
         networks_config = network_settings.get("Networks", {})
 
-        # Stop + remove old container
+        # Stop but don't remove — keep as rollback target
         if container.status == "running":
             container.stop(timeout=10)
-        container.remove(force=True)
+        temp_name = f"{name}__old"
+        container.rename(temp_name)
 
         # Build create kwargs
         create_kwargs = {
@@ -255,8 +256,6 @@ def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
             "detach": True,
         }
 
-        if binds:
-            create_kwargs["volumes"] = binds
         if mounts:
             create_kwargs["mounts"] = mounts
         if restart_policy:
@@ -274,22 +273,30 @@ def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
             )
 
         # Create new container
-        new_container = docker_client.containers.create(**create_kwargs)
+        try:
+            new_container = docker_client.containers.create(**create_kwargs)
 
-        # Connect to original networks
-        for net_name, net_config in networks_config.items():
-            try:
-                network = docker_client.networks.get(net_name)
-                ip_addr = net_config.get("IPAddress")
-                connect_kwargs = {}
-                if ip_addr:
-                    connect_kwargs["ipv4_address"] = ip_addr
-                network.connect(new_container, **connect_kwargs)
-            except Exception as e:
-                logger.warning(f"Could not connect to network {net_name}: {e}")
+            # Connect to original networks
+            for net_name, net_config in networks_config.items():
+                try:
+                    network = docker_client.networks.get(net_name)
+                    ip_addr = net_config.get("IPAddress")
+                    connect_kwargs = {}
+                    if ip_addr:
+                        connect_kwargs["ipv4_address"] = ip_addr
+                    network.connect(new_container, **connect_kwargs)
+                except Exception as e:
+                    logger.warning(f"Could not connect to network {net_name}: {e}")
 
-        # Start
-        new_container.start()
+            new_container.start()
+        except Exception:
+            # Rollback: restore old container
+            container.rename(name)
+            container.start()
+            raise
+
+        # Success — remove old container
+        container.remove(force=True)
 
         msg = f"Container {name} recreated with seccomp profile: {profile_name}"
         logger.info(msg)
@@ -486,39 +493,42 @@ def execute_command(command: str, container, args: Optional[dict] = None) -> tup
         elif command == "wipe":
             wipe_workspace = args.get("wipe_workspace", False) if args else False
 
-            # Capture config before removing so we can recreate
-            from routers.commands import _capture_container_config, _recreate_container
+            from routers.commands import (
+                _capture_container_config,
+                _recreate_container,
+                _wipe_workspace,
+            )
 
             create_kwargs = _capture_container_config(container)
 
-            # Stop and remove container
+            # Stop but don't remove — keep as rollback target
             if container.status == "running":
                 container.stop(timeout=10)
-            container.remove(force=True)
+            temp_name = f"{name}__old"
+            container.rename(temp_name)
 
-            # Optionally wipe workspace
+            # Wipe workspace while old container is stopped (volume not in use)
             if wipe_workspace:
-                volume_name = _workspace_volume_for(container)
-                if volume_name:
-                    try:
-                        docker_client.containers.run(
-                            "alpine:latest",
-                            command="rm -rf /workspace/*",
-                            volumes={volume_name: {"bind": "/workspace", "mode": "rw"}},
-                            remove=True,
-                        )
-                        logger.info(f"Cleared workspace volume {volume_name}")
-                    except Exception as e:
-                        logger.warning(f"Could not wipe workspace for {name}: {e}")
+                try:
+                    _wipe_workspace(container)
+                except Exception as e:
+                    logger.error("Workspace wipe failed for %s: %s", name, e)
+                    container.rename(name)
+                    container.start()
+                    return False, f"Workspace wipe failed for {name}: {e}"
 
-            # Recreate the container with the same config
             try:
                 new_container = _recreate_container(create_kwargs)
                 logger.info(f"Recreated container {name} as {new_container.short_id}")
             except Exception as e:
                 logger.error(f"Failed to recreate container {name}: {e}")
-                return True, f"Agent {name} wiped but recreation failed: {e}"
+                # Rollback: restore old container
+                container.rename(name)
+                container.start()
+                return True, f"Agent {name} wipe failed, restored original: {e}"
 
+            # Success — remove old container
+            container.remove(force=True)
             return True, f"Agent {name} wiped and recreated (workspace={'wiped' if wipe_workspace else 'preserved'})"
 
         else:
@@ -984,6 +994,40 @@ def _check_standalone_resources(agents):
         logger.error(f"Error checking standalone resource limits: {e}")
 
 
+def send_online_ping():
+    """Notify the control plane that this data plane is online.
+
+    POSTs to /api/v1/cell/online with retry logic:
+    - 200: success, return immediately
+    - 202: provisioner not ready yet, sleep retry_after seconds and retry
+    - error/5xx: log warning, sleep 15s and retry
+    - Give up after 15 minutes total
+    """
+    url = f"{CONTROL_PLANE_URL}/api/v1/cell/online"
+    headers = {"Authorization": f"Bearer {CONTROL_PLANE_TOKEN}"}
+    deadline = time.time() + 15 * 60  # 15 minutes
+
+    logger.info("Sending online ping to %s", url)
+    while time.time() < deadline:
+        try:
+            resp = requests.post(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                logger.info("Online ping accepted — provisioning complete")
+                return
+            elif resp.status_code == 202:
+                retry_after = resp.json().get("retry_after", 15)
+                logger.info("Online ping: provisioning pending, retrying in %ds", retry_after)
+                time.sleep(retry_after)
+            else:
+                logger.warning("Online ping returned %d, retrying in 15s", resp.status_code)
+                time.sleep(15)
+        except Exception as e:
+            logger.warning("Online ping failed: %s, retrying in 15s", e)
+            time.sleep(15)
+
+    logger.error("Online ping: gave up after 15 minutes — continuing to heartbeat loop")
+
+
 def main_loop(stop_event: Optional[threading.Event] = None):
     """Main loop: discover agents, send heartbeats, execute commands, sync config."""
     logger.info("Warden polling loop starting")
@@ -1020,6 +1064,10 @@ def main_loop(stop_event: Optional[threading.Event] = None):
         yaml.dump(config_generator.generate_envoy_config(), default_flow_style=False, sort_keys=False)
     )
     logger.info("Initial config generation complete")
+
+    # Notify CP that this DP is online (completes provisioning)
+    if DATAPLANE_MODE == "connected" and CONTROL_PLANE_TOKEN:
+        send_online_ping()
 
     # Use wall-clock monotonic time for config sync scheduling so that
     # slow heartbeat cycles (e.g. Docker stats across many containers)

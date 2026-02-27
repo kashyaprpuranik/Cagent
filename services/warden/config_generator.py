@@ -595,17 +595,6 @@ class ConfigGenerator:
                     }
                 ]
             },
-            "overload_manager": {
-                "resource_monitors": [
-                    {
-                        "name": "envoy.resource_monitors.downstream_connections",
-                        "typed_config": {
-                            "@type": "type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig",
-                            "max_active_downstream_connections": 1000,
-                        },
-                    }
-                ]
-            },
         }
 
     def _build_control_plane_cluster(self) -> dict:

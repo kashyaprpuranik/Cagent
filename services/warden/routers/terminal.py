@@ -119,9 +119,7 @@ async def web_terminal(websocket: WebSocket, name: str):
                             if msg.get("type") == "resize":
                                 cols = int(msg.get("cols", 80))
                                 rows = int(msg.get("rows", 24))
-                                docker_client.api.exec_resize(
-                                    exec_id["Id"], height=rows, width=cols
-                                )
+                                docker_client.api.exec_resize(exec_id["Id"], height=rows, width=cols)
                                 continue
                         except (json.JSONDecodeError, ValueError, KeyError):
                             pass  # Not a resize message — send as normal input

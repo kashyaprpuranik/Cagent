@@ -6,7 +6,9 @@ from typing import List
 import docker
 
 # Docker client (single instance shared across the service)
-docker_client = docker.from_env()
+# Increase max_pool_size to match or exceed MAX_HEARTBEAT_WORKERS (20) to prevent
+# contention in multi-threaded container checks.
+docker_client = docker.from_env(max_pool_size=30)
 
 # ---------------------------------------------------------------------------
 # Cell discovery

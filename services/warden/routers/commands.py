@@ -38,7 +38,6 @@ def _capture_container_config(container) -> dict:
     image = config.get("Image")
     env = config.get("Env", [])
     labels = dict(config.get("Labels", {}))
-    binds = host_config.get("Binds", [])
     dns = host_config.get("Dns", [])
     cap_drop = host_config.get("CapDrop", [])
     security_opt = host_config.get("SecurityOpt", [])
@@ -48,15 +47,27 @@ def _capture_container_config(container) -> dict:
     mem_reservation = host_config.get("MemoryReservation")
     log_config = host_config.get("LogConfig", {})
 
-    # Named volume mounts
+    # Use attrs.Mounts as the single source of truth for ALL mount types.
+    # This avoids duplicates when HostConfig.Binds and attrs.Mounts overlap
+    # for named volumes, which causes Docker to reject the create() call.
     mounts = []
     for mount in attrs.get("Mounts", []):
-        if mount.get("Type", "volume") == "volume":
+        mount_type = mount.get("Type", "volume")
+        if mount_type == "volume":
             mounts.append(
                 docker.types.Mount(
                     target=mount["Destination"],
                     source=mount["Name"],
                     type="volume",
+                    read_only=not mount.get("RW", True),
+                )
+            )
+        elif mount_type == "bind":
+            mounts.append(
+                docker.types.Mount(
+                    target=mount["Destination"],
+                    source=mount["Source"],
+                    type="bind",
                     read_only=not mount.get("RW", True),
                 )
             )
@@ -75,8 +86,6 @@ def _capture_container_config(container) -> dict:
         create_kwargs["cap_drop"] = cap_drop
     if security_opt:
         create_kwargs["security_opt"] = security_opt
-    if binds:
-        create_kwargs["volumes"] = binds
     if mounts:
         create_kwargs["mounts"] = mounts
     if restart_policy:
@@ -158,16 +167,31 @@ async def wipe_cell():
 
     Preserves all container infrastructure config (env, volumes, mounts,
     DNS, capabilities, security options, networks, resource limits).
+
+    Uses atomic rename pattern: the old container is renamed (not removed)
+    before creating the new one.  If recreation fails the old container is
+    restored so the cell is never left permanently dead.
     """
     container = _get_cell_container()
     name = container.name
     try:
         create_kwargs = _capture_container_config(container)
 
+        # Stop but don't remove yet — keep as rollback target
         container.stop(timeout=10)
-        container.remove(force=True)
+        temp_name = f"{name}__old"
+        container.rename(temp_name)
 
-        new_container = _recreate_container(create_kwargs)
+        try:
+            new_container = _recreate_container(create_kwargs)
+        except Exception:
+            # Rollback: restore old container
+            container.rename(name)
+            container.start()
+            raise
+
+        # Success — remove old container
+        container.remove(force=True)
         return {
             "status": "completed",
             "command": "wipe",

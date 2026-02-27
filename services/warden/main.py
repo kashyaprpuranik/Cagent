@@ -984,6 +984,40 @@ def _check_standalone_resources(agents):
         logger.error(f"Error checking standalone resource limits: {e}")
 
 
+def send_online_ping():
+    """Notify the control plane that this data plane is online.
+
+    POSTs to /api/v1/cell/online with retry logic:
+    - 200: success, return immediately
+    - 202: provisioner not ready yet, sleep retry_after seconds and retry
+    - error/5xx: log warning, sleep 15s and retry
+    - Give up after 15 minutes total
+    """
+    url = f"{CONTROL_PLANE_URL}/api/v1/cell/online"
+    headers = {"Authorization": f"Bearer {CONTROL_PLANE_TOKEN}"}
+    deadline = time.time() + 15 * 60  # 15 minutes
+
+    logger.info("Sending online ping to %s", url)
+    while time.time() < deadline:
+        try:
+            resp = requests.post(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                logger.info("Online ping accepted — provisioning complete")
+                return
+            elif resp.status_code == 202:
+                retry_after = resp.json().get("retry_after", 15)
+                logger.info("Online ping: provisioning pending, retrying in %ds", retry_after)
+                time.sleep(retry_after)
+            else:
+                logger.warning("Online ping returned %d, retrying in 15s", resp.status_code)
+                time.sleep(15)
+        except Exception as e:
+            logger.warning("Online ping failed: %s, retrying in 15s", e)
+            time.sleep(15)
+
+    logger.error("Online ping: gave up after 15 minutes — continuing to heartbeat loop")
+
+
 def main_loop(stop_event: Optional[threading.Event] = None):
     """Main loop: discover agents, send heartbeats, execute commands, sync config."""
     logger.info("Warden polling loop starting")
@@ -1020,6 +1054,10 @@ def main_loop(stop_event: Optional[threading.Event] = None):
         yaml.dump(config_generator.generate_envoy_config(), default_flow_style=False, sort_keys=False)
     )
     logger.info("Initial config generation complete")
+
+    # Notify CP that this DP is online (completes provisioning)
+    if DATAPLANE_MODE == "connected" and CONTROL_PLANE_TOKEN:
+        send_online_ping()
 
     # Use wall-clock monotonic time for config sync scheduling so that
     # slow heartbeat cycles (e.g. Docker stats across many containers)

@@ -104,13 +104,6 @@ def discover_cell_containers() -> List:
         return []
 
 
-def _workspace_volume_for(container) -> Optional[str]:
-    """Derive the workspace volume name for a container from its mounts."""
-    for mount in container.attrs.get("Mounts", []):
-        if mount.get("Destination") == "/workspace":
-            return mount.get("Name")
-    return None
-
 
 # ---------------------------------------------------------------------------
 # Seccomp profile management
@@ -501,7 +494,11 @@ def execute_command(command: str, container, args: Optional[dict] = None) -> tup
         elif command == "wipe":
             wipe_workspace = args.get("wipe_workspace", False) if args else False
 
-            from routers.commands import _capture_container_config, _recreate_container
+            from routers.commands import (
+                _capture_container_config,
+                _recreate_container,
+                _wipe_workspace,
+            )
 
             create_kwargs = _capture_container_config(container)
 
@@ -513,18 +510,13 @@ def execute_command(command: str, container, args: Optional[dict] = None) -> tup
 
             # Wipe workspace while old container is stopped (volume not in use)
             if wipe_workspace:
-                volume_name = _workspace_volume_for(container)
-                if volume_name:
-                    try:
-                        docker_client.containers.run(
-                            "alpine:latest",
-                            command="rm -rf /workspace/*",
-                            volumes={volume_name: {"bind": "/workspace", "mode": "rw"}},
-                            remove=True,
-                        )
-                        logger.info(f"Cleared workspace volume {volume_name}")
-                    except Exception as e:
-                        logger.warning(f"Could not wipe workspace for {name}: {e}")
+                try:
+                    _wipe_workspace(container)
+                except Exception as e:
+                    logger.error("Workspace wipe failed for %s: %s", name, e)
+                    container.rename(name)
+                    container.start()
+                    return False, f"Workspace wipe failed for {name}: {e}"
 
             try:
                 new_container = _recreate_container(create_kwargs)

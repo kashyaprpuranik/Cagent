@@ -14,7 +14,8 @@ from fastapi import APIRouter, HTTPException, Query
 router = APIRouter()
 
 # Only allow valid DNS domain characters to prevent command injection in nslookup
-_VALID_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
+# Also disallow starting with '-' to prevent flag injection in subprocess calls
+_VALID_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9._][a-zA-Z0-9._-]*$")
 
 
 def _get_envoy_logs(hours: int) -> str:

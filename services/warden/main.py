@@ -493,43 +493,16 @@ def execute_command(command: str, container, args: Optional[dict] = None) -> tup
         elif command == "wipe":
             wipe_workspace = args.get("wipe_workspace", False) if args else False
 
-            from routers.commands import (
-                _capture_container_config,
-                _recreate_container,
-                _wipe_workspace,
-            )
+            from routers.commands import _wipe_workspace
 
-            create_kwargs = _capture_container_config(container)
-
-            # Stop but don't remove — keep as rollback target
             if container.status == "running":
                 container.stop(timeout=10)
-            temp_name = f"{name}__old"
-            container.rename(temp_name)
 
-            # Wipe workspace while old container is stopped (volume not in use)
             if wipe_workspace:
-                try:
-                    _wipe_workspace(container)
-                except Exception as e:
-                    logger.error("Workspace wipe failed for %s: %s", name, e)
-                    container.rename(name)
-                    container.start()
-                    return False, f"Workspace wipe failed for {name}: {e}"
+                _wipe_workspace(container)
 
-            try:
-                new_container = _recreate_container(create_kwargs)
-                logger.info(f"Recreated container {name} as {new_container.short_id}")
-            except Exception as e:
-                logger.error(f"Failed to recreate container {name}: {e}")
-                # Rollback: restore old container
-                container.rename(name)
-                container.start()
-                return True, f"Agent {name} wipe failed, restored original: {e}"
-
-            # Success — remove old container
-            container.remove(force=True)
-            return True, f"Agent {name} wiped and recreated (workspace={'wiped' if wipe_workspace else 'preserved'})"
+            container.start()
+            return True, f"Cell {name} wiped (workspace={'wiped' if wipe_workspace else 'preserved'})"
 
         else:
             return False, f"Unknown command: {command}"

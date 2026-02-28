@@ -43,8 +43,13 @@ restore_sudo_password() {
     if [ -f "$hash_file" ]; then
         local hash
         hash=$(cat "$hash_file")
-        usermod -p "$hash" "$USER_NAME"
-        echo "Sudo password restored from persistent storage"
+        # Validate hash is non-empty and not a locked/disabled marker
+        if [ -n "$hash" ] && [ "$hash" != "!" ] && [ "$hash" != "*" ]; then
+            usermod -p "$hash" "$USER_NAME"
+            echo "Sudo password restored from persistent storage"
+        else
+            echo "WARNING: Invalid password hash in $hash_file, skipping restore"
+        fi
     fi
 }
 

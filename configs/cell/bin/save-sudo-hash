@@ -1,8 +1,18 @@
 #!/bin/bash
+set -euo pipefail
 # Save the cell user's password hash to persistent storage.
 # Run as root after `passwd cell` to persist the password across container restarts.
 USER_NAME="${1:-cell}"
+
+hash=$(getent shadow "${USER_NAME}" 2>/dev/null | cut -d: -f2)
+
+if [ -z "$hash" ] || [ "$hash" = "!" ] || [ "$hash" = "*" ]; then
+    echo "Error: No valid password hash found for user '${USER_NAME}'." >&2
+    echo "Please set a password for the user first (e.g., 'passwd ${USER_NAME}')." >&2
+    exit 1
+fi
+
 mkdir -p /workspace/.cagent
-grep "^${USER_NAME}:" /etc/shadow | cut -d: -f2 > /workspace/.cagent/sudo_hash
+echo "${hash}" > /workspace/.cagent/sudo_hash
 chmod 600 /workspace/.cagent/sudo_hash
 echo "Sudo password hash saved to /workspace/.cagent/sudo_hash"

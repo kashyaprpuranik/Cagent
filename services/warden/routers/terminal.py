@@ -74,7 +74,7 @@ async def web_terminal(websocket: WebSocket, name: str, root: bool = False):
         exec_id = docker_client.api.exec_create(
             container.id,
             cmd="/bin/bash",
-            user="root" if root else "",
+            user="root" if root else "cell",
             stdin=True,
             tty=True,
             stdout=True,

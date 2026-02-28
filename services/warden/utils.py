@@ -1,8 +1,31 @@
 import asyncio
-from typing import List
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import WebSocket
+
+
+def calculate_container_stats(stats: dict) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Calculate CPU and memory usage from Docker stats API response.
+
+    Returns (cpu_percent, memory_mb, memory_limit_mb).
+    """
+    cpu_percent = None
+    cpu_delta = (
+        stats["cpu_stats"]["cpu_usage"]["total_usage"] - stats["precpu_stats"]["cpu_usage"]["total_usage"]
+    )
+    system_delta = stats["cpu_stats"]["system_cpu_usage"] - stats["precpu_stats"]["system_cpu_usage"]
+    num_cpus = stats["cpu_stats"].get("online_cpus", 1)
+
+    if system_delta > 0:
+        cpu_percent = round((cpu_delta / system_delta) * num_cpus * 100, 2)
+
+    memory_usage = stats["memory_stats"].get("usage", 0)
+    memory_limit = stats["memory_stats"].get("limit", 0)
+    memory_mb = round(memory_usage / (1024 * 1024), 2)
+    memory_limit_mb = round(memory_limit / (1024 * 1024), 2)
+
+    return cpu_percent, memory_mb, memory_limit_mb
 
 
 async def async_generator(sync_generator):

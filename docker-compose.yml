@@ -80,7 +80,7 @@ services:
       resources:
         limits:
           cpus: '${CELL_CPU_LIMIT:-2}'
-          memory: ${CELL_MEMORY_LIMIT:-4G}
+          memory: ${CELL_MEMORY_LIMIT:-2G}
           pids: ${CELL_PIDS_LIMIT:-256}
         reservations:
           cpus: '0.5'
@@ -283,6 +283,13 @@ services:
       timeout: 5s
       retries: 3
 
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
+
     # On BOTH networks - cell-net for cell access, infra-net for upstream
     networks:
       cell-net:
@@ -335,7 +342,7 @@ services:
       resources:
         limits:
           cpus: '1'
-          memory: 1G
+          memory: 512M
         reservations:
           cpus: '0.25'
           memory: 128M
@@ -391,7 +398,7 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 256M
         reservations:
           cpus: '0.1'
           memory: 64M
@@ -456,6 +463,13 @@ services:
     ports:
       - "${LOCAL_ADMIN_PORT:-8081}:8080"
 
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/api/health || exit 1"]
       interval: 10s
@@ -498,9 +512,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 512M
         reservations:
-          memory: 256M
+          memory: 128M
 
     restart: unless-stopped
 

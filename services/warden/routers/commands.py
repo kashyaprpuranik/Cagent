@@ -199,7 +199,8 @@ def _wipe_workspace(container) -> None:
         logger.info("Wiping workspace: clearing bind mount %s using image %s", source, image)
         docker_client.containers.run(
             image,
-            command="find /workspace -mindepth 1 -delete",
+            entrypoint="/bin/sh",
+            command=["-c", "find /workspace -mindepth 1 -delete"],
             volumes={source: {"bind": "/workspace", "mode": "rw"}},
             remove=True,
             network_disabled=True,

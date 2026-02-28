@@ -174,7 +174,7 @@ ARG USER_GID=1000
 
 RUN groupadd --gid $USER_GID $USER_NAME \
     && useradd --uid $USER_UID --gid $USER_GID -m -s /bin/bash $USER_NAME \
-    && echo "$USER_NAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/$USER_NAME \
+    && echo "$USER_NAME ALL=(ALL) ALL" >> /etc/sudoers.d/$USER_NAME \
     && chmod 0440 /etc/sudoers.d/$USER_NAME
 
 # SSH directory for user
@@ -201,6 +201,10 @@ RUN chmod +x /etc/profile.d/99-tmux-session.sh
 # Session management helper
 COPY configs/cell/bin/session /usr/local/bin/session
 RUN chmod +x /usr/local/bin/session
+
+# Sudo password persistence helper (run as root after `passwd cell`)
+COPY configs/cell/bin/save-sudo-hash /usr/local/bin/save-sudo-hash
+RUN chmod +x /usr/local/bin/save-sudo-hash
 
 # =============================================================================
 # Seed traffic script (for local.sh log seeding)

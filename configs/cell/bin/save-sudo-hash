@@ -1,0 +1,8 @@
+#!/bin/bash
+# Save the cell user's password hash to persistent storage.
+# Run as root after `passwd cell` to persist the password across container restarts.
+USER_NAME="${1:-cell}"
+mkdir -p /workspace/.cagent
+grep "^${USER_NAME}:" /etc/shadow | cut -d: -f2 > /workspace/.cagent/sudo_hash
+chmod 600 /workspace/.cagent/sudo_hash
+echo "Sudo password hash saved to /workspace/.cagent/sudo_hash"

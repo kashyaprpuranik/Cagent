@@ -37,6 +37,17 @@ setup_ssh_keys() {
     fi
 }
 
+# Restore sudo password hash from persistent storage
+restore_sudo_password() {
+    local hash_file="$WORKSPACE/.cagent/sudo_hash"
+    if [ -f "$hash_file" ]; then
+        local hash
+        hash=$(cat "$hash_file")
+        usermod -p "$hash" "$USER_NAME"
+        echo "Sudo password restored from persistent storage"
+    fi
+}
+
 # Generate host keys if missing
 setup_host_keys() {
     if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
@@ -87,6 +98,7 @@ echo "User: $USER_NAME"
 
 setup_host_keys
 setup_ssh_keys
+restore_sudo_password
 setup_tmux
 recover_tmux_sessions
 

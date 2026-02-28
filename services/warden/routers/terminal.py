@@ -33,7 +33,7 @@ def _get_raw_socket(sock):
 
 
 @router.websocket("/terminal")
-async def web_terminal_default(websocket: WebSocket):
+async def web_terminal_default(websocket: WebSocket, root: bool = False):
     """Interactive terminal session — auto-selects the first cell container."""
     containers = discover_cell_container_names()
     if not containers:
@@ -41,11 +41,11 @@ async def web_terminal_default(websocket: WebSocket):
         await websocket.send_text("\r\nNo cell containers found.\r\n")
         await websocket.close()
         return
-    await web_terminal(websocket, containers[0])
+    await web_terminal(websocket, containers[0], root=root)
 
 
 @router.websocket("/terminal/{name}")
-async def web_terminal(websocket: WebSocket, name: str):
+async def web_terminal(websocket: WebSocket, name: str, root: bool = False):
     """Interactive terminal session via WebSocket."""
     if not validate_websocket_origin(websocket, ALLOWED_CORS_ORIGINS):
         await websocket.close(code=1008)
@@ -74,6 +74,7 @@ async def web_terminal(websocket: WebSocket, name: str):
         exec_id = docker_client.api.exec_create(
             container.id,
             cmd="/bin/bash",
+            user="root" if root else "",
             stdin=True,
             tty=True,
             stdout=True,

@@ -11,9 +11,7 @@ def calculate_container_stats(stats: dict) -> Tuple[Optional[float], Optional[fl
     Returns (cpu_percent, memory_mb, memory_limit_mb).
     """
     cpu_percent = None
-    cpu_delta = (
-        stats["cpu_stats"]["cpu_usage"]["total_usage"] - stats["precpu_stats"]["cpu_usage"]["total_usage"]
-    )
+    cpu_delta = stats["cpu_stats"]["cpu_usage"]["total_usage"] - stats["precpu_stats"]["cpu_usage"]["total_usage"]
     system_delta = stats["cpu_stats"]["system_cpu_usage"] - stats["precpu_stats"]["system_cpu_usage"]
     num_cpus = stats["cpu_stats"].get("online_cpus", 1)
 

@@ -1,0 +1,248 @@
+{
+  "policies": [
+    {
+      "domain": "api.openai.com",
+      "alias": "openai",
+      "description": "OpenAI API - ChatGPT, GPT-4, embeddings",
+      "timeout": "120s",
+      "requests_per_minute": 60,
+      "burst_size": 10,
+      "allowed_paths": ["/v1/chat/*", "/v1/completions", "/v1/embeddings", "/v1/models"]
+    },
+    {
+      "domain": "api.anthropic.com",
+      "alias": "anthropic",
+      "description": "Anthropic API - Claude models",
+      "timeout": "120s",
+      "requests_per_minute": 60,
+      "burst_size": 10,
+      "allowed_paths": ["/v1/messages", "/v1/complete"]
+    },
+    {
+      "domain": "github.com",
+      "description": "GitHub web"
+    },
+    {
+      "domain": "api.github.com",
+      "alias": "github",
+      "description": "GitHub API - repos, issues, PRs",
+      "timeout": "30s",
+      "requests_per_minute": 100,
+      "burst_size": 20
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "description": "GitHub raw content"
+    },
+    {
+      "domain": "objects.githubusercontent.com",
+      "description": "GitHub objects"
+    },
+    {
+      "domain": "gist.githubusercontent.com",
+      "description": "GitHub gist content"
+    },
+    {
+      "domain": "codeload.github.com",
+      "description": "GitHub code downloads"
+    },
+    {
+      "domain": "pypi.org",
+      "description": "Python Package Index",
+      "read_only": true
+    },
+    {
+      "domain": "files.pythonhosted.org",
+      "description": "Python package downloads",
+      "read_only": true
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "description": "NPM Registry",
+      "read_only": true
+    },
+    {
+      "domain": "registry.yarnpkg.com",
+      "description": "Yarn Registry",
+      "read_only": true
+    },
+    {
+      "domain": "huggingface.co",
+      "alias": "huggingface",
+      "description": "HuggingFace models",
+      "timeout": "300s",
+      "requests_per_minute": 30,
+      "burst_size": 5
+    },
+    {
+      "domain": "cdn-lfs.huggingface.co",
+      "description": "HuggingFace LFS - large model downloads",
+      "timeout": "600s"
+    },
+    {
+      "domain": "*.aws.amazon.com",
+      "description": "AWS APIs"
+    },
+    {
+      "domain": "openrouter.ai",
+      "description": "OpenRouter - multi-provider LLM gateway",
+      "timeout": "120s",
+      "requests_per_minute": 60,
+      "burst_size": 10
+    },
+    {
+      "domain": "api.perplexity.ai",
+      "description": "Perplexity - search-augmented LLM",
+      "timeout": "120s",
+      "requests_per_minute": 30,
+      "burst_size": 5
+    },
+    {
+      "domain": "api.x.ai",
+      "description": "xAI Grok API",
+      "timeout": "120s",
+      "requests_per_minute": 30,
+      "burst_size": 5
+    },
+    {
+      "domain": "api.minimax.io",
+      "description": "Minimax API",
+      "timeout": "120s",
+      "requests_per_minute": 30,
+      "burst_size": 5
+    },
+    {
+      "domain": "chatgpt.com",
+      "description": "ChatGPT web API - usage tracking",
+      "requests_per_minute": 10,
+      "burst_size": 5
+    },
+    {
+      "domain": "claude.ai",
+      "description": "Claude web API - usage tracking",
+      "requests_per_minute": 10,
+      "burst_size": 5
+    },
+    {
+      "domain": "api.telegram.org",
+      "description": "Telegram Bot API",
+      "requests_per_minute": 30,
+      "burst_size": 10
+    },
+    {
+      "domain": "discord.com",
+      "description": "Discord REST API",
+      "requests_per_minute": 60,
+      "burst_size": 15
+    },
+    {
+      "domain": "gateway.discord.gg",
+      "description": "Discord Gateway (WebSocket)"
+    },
+    {
+      "domain": "cdn.discordapp.com",
+      "description": "Discord CDN - attachments",
+      "requests_per_minute": 30,
+      "burst_size": 10
+    },
+    {
+      "domain": "api.slack.com",
+      "description": "Slack API",
+      "requests_per_minute": 60,
+      "burst_size": 15
+    },
+    {
+      "domain": "wss-primary.whatsapp.net",
+      "description": "WhatsApp WebSocket"
+    },
+    {
+      "domain": "mmg.whatsapp.net",
+      "description": "WhatsApp media",
+      "requests_per_minute": 30,
+      "burst_size": 10
+    },
+    {
+      "domain": "web.whatsapp.com",
+      "description": "WhatsApp Web"
+    },
+    {
+      "domain": "chat.googleapis.com",
+      "description": "Google Chat API",
+      "requests_per_minute": 30,
+      "burst_size": 10
+    },
+    {
+      "domain": "graph.microsoft.com",
+      "description": "Microsoft Graph API - Teams",
+      "requests_per_minute": 60,
+      "burst_size": 15
+    },
+    {
+      "domain": "api.botframework.com",
+      "description": "Microsoft Bot Framework",
+      "requests_per_minute": 30,
+      "burst_size": 10
+    },
+    {
+      "domain": "open.feishu.cn",
+      "description": "Feishu/Lark API",
+      "requests_per_minute": 30,
+      "burst_size": 10
+    },
+    {
+      "domain": "bot-api.zaloplatforms.com",
+      "description": "Zalo Bot API",
+      "requests_per_minute": 30,
+      "burst_size": 10
+    },
+    {
+      "domain": "api.search.brave.com",
+      "description": "Brave web search",
+      "requests_per_minute": 30,
+      "burst_size": 5
+    },
+    {
+      "domain": "api.firecrawl.dev",
+      "description": "Firecrawl web scraping",
+      "requests_per_minute": 10,
+      "burst_size": 3
+    },
+    {
+      "domain": "api.elevenlabs.io",
+      "description": "ElevenLabs text-to-speech",
+      "requests_per_minute": 10,
+      "burst_size": 3
+    },
+    {
+      "domain": "api.deepgram.com",
+      "description": "Deepgram speech-to-text",
+      "requests_per_minute": 10,
+      "burst_size": 3
+    },
+    {
+      "domain": "www.youtube.com",
+      "description": "YouTube embeds and content",
+      "read_only": true,
+      "requests_per_minute": 10,
+      "burst_size": 3
+    },
+    {
+      "domain": "oauth2.googleapis.com",
+      "description": "Google OAuth2 token exchange",
+      "requests_per_minute": 10,
+      "burst_size": 5
+    },
+    {
+      "domain": "www.googleapis.com",
+      "description": "Google API services",
+      "requests_per_minute": 30,
+      "burst_size": 10
+    },
+    {
+      "domain": "login.microsoftonline.com",
+      "description": "Microsoft OAuth2",
+      "requests_per_minute": 10,
+      "burst_size": 5
+    }
+  ]
+}

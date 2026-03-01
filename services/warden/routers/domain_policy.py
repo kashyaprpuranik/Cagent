@@ -53,15 +53,27 @@ def invalidate_cache():
     _policy_cache.clear()
 
 
-def _build_standalone_policy(domain: str) -> dict:
-    """Build a policy response from cagent.yaml for standalone mode."""
+# In-memory cache for cagent.yaml to avoid redundant file I/O and YAML parsing
+_config_cache: dict = {"mtime": 0.0, "config": {}}
+
+def _get_cagent_config() -> dict:
+    """Read and parse cagent.yaml, caching it based on file modification time."""
     config_path = Path(CAGENT_CONFIG_PATH)
     if not config_path.exists():
-        return {"matched": False, "domain": domain}
-
+        return {}
     try:
-        config = yaml.safe_load(config_path.read_text()) or {}
+        mtime = config_path.stat().st_mtime
+        if _config_cache["mtime"] != mtime:
+            _config_cache["config"] = yaml.safe_load(config_path.read_text()) or {}
+            _config_cache["mtime"] = mtime
+        return _config_cache["config"]
     except Exception:
+        return {}
+
+def _build_standalone_policy(domain: str) -> dict:
+    """Build a policy response from cagent.yaml for standalone mode."""
+    config = _get_cagent_config()
+    if not config:
         return {"matched": False, "domain": domain}
 
     domains = config.get("domains", [])

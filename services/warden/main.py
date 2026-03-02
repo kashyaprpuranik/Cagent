@@ -42,7 +42,9 @@ from constants import (
     ENVOY_CONTAINER_NAME,
     HEARTBEAT_INTERVAL,
     MAX_HEARTBEAT_WORKERS,
+    RUNTIME_POLICIES,
     SECCOMP_PROFILES_DIR,
+    VALID_RUNTIME_POLICIES,
     VALID_SECCOMP_PROFILES,
     docker_client,
 )
@@ -130,8 +132,12 @@ def _load_seccomp_profile(name: str) -> dict:
         return json.load(f)
 
 
-def _get_current_seccomp_label(container) -> Optional[str]:
-    """Read the cagent.seccomp_profile label from a container.
+def _get_current_policy_label(container) -> Optional[str]:
+    """Read the runtime policy label from a container.
+
+    Checks ``cagent.runtime_policy`` first, falls back to
+    ``cagent.seccomp_profile`` for backward compatibility with
+    containers created before the runtime-policy rename.
 
     Returns None for unlabelled containers (including all existing ones
     before this feature was added).
@@ -139,52 +145,64 @@ def _get_current_seccomp_label(container) -> Optional[str]:
     try:
         container.reload()
         labels = container.labels or {}
-        return labels.get("cagent.seccomp_profile")
+        return labels.get("cagent.runtime_policy") or labels.get("cagent.seccomp_profile")
     except Exception:
         return None
 
 
-def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
-    """Recreate an cell container with a new seccomp profile.
+def recreate_container_with_policy(container, policy_name: str) -> tuple:
+    """Recreate a cell container with a new runtime policy.
 
-    Stops the old container, removes it, creates a new one with the
-    same configuration but the new seccomp profile, and starts it.
+    Applies the complete security posture (seccomp, capabilities,
+    read-only root, tmpfs, no-new-privileges) from RUNTIME_POLICIES.
+
+    Non-security settings (image, env, labels, mounts, dns, resources,
+    networks, log_config, restart_policy) are copied from the old
+    container.
 
     Args:
         container: Docker container object
-        profile_name: One of standard, hardened, permissive
+        policy_name: One of standard, hardened, permissive
 
     Returns:
         (success: bool, message: str)
     """
     name = container.name
-    if profile_name == "permissive":
+    policy = RUNTIME_POLICIES[policy_name]
+
+    if policy_name == "permissive":
         logger.warning(
-            f"Applying PERMISSIVE seccomp profile to {name}. "
-            "This effectively disables syscall sandboxing and allows container-escape "
-            "primitives (ptrace, mount, unshare, setns). Use only for temporary debugging."
+            f"Applying PERMISSIVE runtime policy to {name}. "
+            "This relaxes capabilities, disables read-only root, and uses a permissive "
+            "seccomp profile. Use only for temporary debugging."
         )
-    logger.info(f"Recreating container {name} with seccomp profile: {profile_name}")
+    logger.info(f"Recreating container {name} with runtime policy: {policy_name}")
 
     try:
-        # Load new profile
-        profile_json = _load_seccomp_profile(profile_name)
+        # Load seccomp profile for this policy
+        profile_json = _load_seccomp_profile(policy["seccomp"])
         inline_json = json.dumps(profile_json)
 
-        # Inspect old container to capture full config
+        # Build security_opt from policy
+        security_opt = [f"seccomp={inline_json}"]
+        if policy["no_new_privileges"]:
+            security_opt.append("no-new-privileges:true")
+
+        # Inspect old container to capture non-security config
         container.reload()
         attrs = container.attrs
         config = attrs.get("Config", {})
         host_config = attrs.get("HostConfig", {})
         network_settings = attrs.get("NetworkSettings", {})
 
-        # Capture configuration
+        # Capture non-security configuration from old container
         image = config.get("Image")
         env = config.get("Env", [])
         old_labels = dict(config.get("Labels", {}))
 
-        # Update labels with new seccomp profile
-        old_labels["cagent.seccomp_profile"] = profile_name
+        # Update labels with new policy (set both for backward compat)
+        old_labels["cagent.runtime_policy"] = policy_name
+        old_labels["cagent.seccomp_profile"] = policy_name
 
         # Use attrs.Mounts as the single source of truth for ALL mount types.
         # This avoids duplicates when HostConfig.Binds and attrs.Mounts overlap
@@ -214,16 +232,6 @@ def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
         # DNS
         dns = host_config.get("Dns", [])
 
-        # Cap drop
-        cap_drop = host_config.get("CapDrop", [])
-
-        # Security opts - keep non-seccomp entries, replace seccomp
-        old_security_opt = host_config.get("SecurityOpt", [])
-        new_security_opt = [
-            opt for opt in old_security_opt if not opt.startswith("seccomp=") and not opt.startswith("seccomp:")
-        ]
-        new_security_opt.append(f"seccomp={inline_json}")
-
         # Restart policy
         restart_policy = host_config.get("RestartPolicy", {})
 
@@ -244,18 +252,25 @@ def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
         temp_name = f"{name}__old"
         container.rename(temp_name)
 
-        # Build create kwargs
+        # Build create kwargs — security settings come from policy, not old container
         create_kwargs = {
             "image": image,
             "name": name,
             "environment": env,
             "labels": old_labels,
             "dns": dns if dns else None,
-            "cap_drop": cap_drop if cap_drop else None,
-            "security_opt": new_security_opt,
+            "cap_drop": policy["cap_drop"] if policy["cap_drop"] else None,
+            "cap_add": policy["cap_add"] if policy["cap_add"] else None,
+            "read_only": policy["read_only"],
+            "security_opt": security_opt,
             "network_disabled": True,
             "detach": True,
         }
+
+        # tmpfs from policy
+        if policy["tmpfs"]:
+            # Docker SDK expects dict: {"/tmp": "size=100M", ...}
+            create_kwargs["tmpfs"] = policy["tmpfs"]
 
         if mounts:
             create_kwargs["mounts"] = mounts
@@ -299,12 +314,12 @@ def recreate_container_with_seccomp(container, profile_name: str) -> tuple:
         # Success — remove old container
         container.remove(force=True)
 
-        msg = f"Container {name} recreated with seccomp profile: {profile_name}"
+        msg = f"Container {name} recreated with runtime policy: {policy_name}"
         logger.info(msg)
         return True, msg
 
     except Exception as e:
-        logger.error(f"Failed to recreate container {name} with seccomp profile {profile_name}: {e}")
+        logger.error(f"Failed to recreate container {name} with runtime policy {policy_name}: {e}")
         return False, str(e)
 
 
@@ -813,25 +828,26 @@ def _heartbeat_and_handle(container):
                 _last_command_results.pop(container.name, None)
         return policy_version
 
-    # No command — check if seccomp profile needs updating
-    seccomp_changed = False
-    desired_profile = response.get("seccomp_profile")
-    if desired_profile and desired_profile in VALID_SECCOMP_PROFILES:
-        current_label = _get_current_seccomp_label(container)
+    # No command — check if runtime policy needs updating
+    # Accept runtime_policy (new) or seccomp_profile (backward compat from old CPs)
+    policy_changed = False
+    desired_policy = response.get("runtime_policy") or response.get("seccomp_profile")
+    if desired_policy and desired_policy in VALID_RUNTIME_POLICIES:
+        current_label = _get_current_policy_label(container)
         # Skip unlabelled containers (existing deployments) and gVisor containers
-        if current_label is not None and current_label != desired_profile:
-            logger.info(f"Seccomp mismatch on {container.name}: current={current_label}, desired={desired_profile}")
-            success, message = recreate_container_with_seccomp(container, desired_profile)
-            seccomp_changed = True
+        if current_label is not None and current_label != desired_policy:
+            logger.info(f"Policy mismatch on {container.name}: current={current_label}, desired={desired_policy}")
+            success, message = recreate_container_with_policy(container, desired_policy)
+            policy_changed = True
             with _command_results_lock:
                 _last_command_results[container.name] = {
-                    "command": "seccomp_update",
+                    "command": "policy_update",
                     "result": "success" if success else "failed",
                     "message": message,
                 }
 
-    # Check resource limits (skip if seccomp just triggered a recreation)
-    if not seccomp_changed:
+    # Check resource limits (skip if policy change just triggered a recreation)
+    if not policy_changed:
         desired_cpu = response.get("cpu_limit")
         desired_mem = response.get("memory_limit_mb")
         desired_pids = response.get("pids_limit")
@@ -890,10 +906,13 @@ def _heartbeat_and_handle(container):
     return policy_version
 
 
-def _check_standalone_seccomp(agents):
-    """In standalone mode, check cagent.yaml security.seccomp_profile against containers.
+def _check_standalone_policy(agents):
+    """In standalone mode, check cagent.yaml runtime policy against containers.
 
-    Only recreates containers that have a cagent.seccomp_profile label
+    Reads ``security.runtime_policy`` first, falls back to
+    ``security.seccomp_profile`` for backward compatibility.
+
+    Only recreates containers that already have a policy/seccomp label
     (skips unlabelled/gVisor containers).
     """
     try:
@@ -902,20 +921,21 @@ def _check_standalone_seccomp(agents):
             return
         with open(config_path, "r") as f:
             config = yaml.safe_load(f) or {}
-        desired = config.get("security", {}).get("seccomp_profile", "hardened")
-        if desired not in VALID_SECCOMP_PROFILES:
-            logger.warning(f"Invalid seccomp_profile in cagent.yaml: {desired}")
+        security = config.get("security", {})
+        desired = security.get("runtime_policy") or security.get("seccomp_profile", "hardened")
+        if desired not in VALID_RUNTIME_POLICIES:
+            logger.warning(f"Invalid runtime_policy in cagent.yaml: {desired}")
             return
 
         for container in agents:
-            current_label = _get_current_seccomp_label(container)
+            current_label = _get_current_policy_label(container)
             if current_label is not None and current_label != desired:
                 logger.info(
-                    f"Standalone seccomp mismatch on {container.name}: current={current_label}, desired={desired}"
+                    f"Standalone policy mismatch on {container.name}: current={current_label}, desired={desired}"
                 )
-                recreate_container_with_seccomp(container, desired)
+                recreate_container_with_policy(container, desired)
     except Exception as e:
-        logger.error(f"Error checking standalone seccomp profiles: {e}")
+        logger.error(f"Error checking standalone runtime policies: {e}")
 
 
 def _check_standalone_resources(agents):
@@ -1073,9 +1093,9 @@ def main_loop(stop_event: Optional[threading.Event] = None):
                 _config_state.last_policy_version = policy_version
                 last_sync_time = now
 
-            # Standalone mode: check seccomp profile and resource limits from cagent.yaml
+            # Standalone mode: check runtime policy and resource limits from cagent.yaml
             if DATAPLANE_MODE == "standalone" and agents:
-                _check_standalone_seccomp(agents)
+                _check_standalone_policy(agents)
                 _check_standalone_resources(agents)
 
         except Exception as e:

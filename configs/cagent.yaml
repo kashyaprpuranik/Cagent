@@ -29,8 +29,10 @@ rate_limits:
     burst_size: 20
 
 # Container security settings
+# runtime_policy controls the full security posture (seccomp, caps, read_only, tmpfs)
+# Accepts: standard, hardened, permissive.  Falls back to seccomp_profile for backward compat.
 security:
-  seccomp_profile: standard  # standard (dev), hardened (prod). permissive exists but disables sandboxing — debug only
+  runtime_policy: standard  # standard (dev), hardened (prod). permissive relaxes all security — debug only
 
 # Container resource limits (standalone mode)
 # Warden writes these to .env → docker-compose reads them via ${VAR:-default}

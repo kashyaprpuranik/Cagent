@@ -55,6 +55,9 @@ restore_sudo_password() {
 
 # Generate host keys if missing
 setup_host_keys() {
+    # Ensure sshd privilege-separation directory exists (needed when / is read-only
+    # and /run is a tmpfs that starts empty)
+    mkdir -p /var/run/sshd
     if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
         echo "Generating SSH host keys..."
         ssh-keygen -A

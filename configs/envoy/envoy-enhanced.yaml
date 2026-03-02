@@ -209,6 +209,25 @@ static_resources:
                             auto_host_rewrite: true
 
                     # ---------------------------------------------------------
+                    # Cloud metadata endpoint — explicit block (defense-in-depth)
+                    # cell-net is internal:true so cell can't reach this IP directly,
+                    # but block at the proxy layer too in case of misconfiguration
+                    # ---------------------------------------------------------
+                    - name: metadata_block
+                      domains:
+                        - "169.254.169.254"
+                        - "169.254.169.254:*"
+                        - "metadata.google.internal"
+                        - "metadata.google.internal:*"
+                      routes:
+                        - match:
+                            prefix: "/"
+                          direct_response:
+                            status: 403
+                            body:
+                              inline_string: '{"error": "metadata_blocked", "message": "Cloud metadata access is blocked"}'
+
+                    # ---------------------------------------------------------
                     # Catch-all - Block with logging
                     # ---------------------------------------------------------
                     - name: blocked

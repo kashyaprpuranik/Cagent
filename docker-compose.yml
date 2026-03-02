@@ -41,6 +41,9 @@
 #   - Cell has no direct internet/CP access (IP bypass prevention)
 #   - Credential injection handled by HTTP proxy ext_authz filter (warden)
 #   - Only HTTP proxy and log shipper can reach control plane
+#   - Cloud metadata (169.254.169.254) blocked at two layers:
+#     1. cell-net is internal:true — no default gateway, no route to link-local
+#     2. Envoy catch-all returns 403 for any non-allowlisted domain/IP
 #
 # =============================================================================
 
@@ -67,9 +70,19 @@ services:
     # Standard container runtime (no gVisor)
     runtime: runc
 
-    # Security hardening
+    # Security hardening — drop ALL capabilities, add back only what's needed
     cap_drop:
-      - NET_RAW
+      - ALL
+    cap_add:
+      - CHOWN            # entrypoint: chown on SSH keys, tmux dirs
+      - DAC_OVERRIDE     # read/write files across users during setup
+      - FOWNER           # entrypoint: chmod on SSH authorized_keys
+      - SETUID           # gosu + sshd privilege separation
+      - SETGID           # gosu + sshd privilege separation
+      - NET_BIND_SERVICE # sshd binds port 22
+      - SYS_CHROOT       # sshd privilege separation (ChrootDirectory)
+      - AUDIT_WRITE      # sshd/PAM audit logging
+      - KILL             # sshd manages child processes
     security_opt:
       - no-new-privileges:true
       # Block raw sockets to prevent proxy bypass via packet crafting
@@ -109,6 +122,16 @@ services:
     # SSH access (set SSH_AUTHORIZED_KEYS to enable)
     ports:
       - "${SSH_PORT:-2222}:22"
+
+    # Read-only root filesystem (defense-in-depth)
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
+      - /run:size=10M
+      - /var/log:size=50M
+      - /etc/ssh:size=1M           # sshd host key generation at startup
+      - /home/cell:size=10M        # SSH keys, tmux config written by entrypoint
+      - /etc/profile.d:size=1M     # tmux env setup by entrypoint
 
     # Volumes
     volumes:
@@ -163,6 +186,20 @@ services:
     # gVisor runtime - syscalls intercepted in user-space
     runtime: runsc
 
+    # Security hardening — drop ALL capabilities, add back only what's needed
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN            # entrypoint: chown on SSH keys, tmux dirs
+      - DAC_OVERRIDE     # read/write files across users during setup
+      - FOWNER           # entrypoint: chmod on SSH authorized_keys
+      - SETUID           # gosu + sshd privilege separation
+      - SETGID           # gosu + sshd privilege separation
+      - NET_BIND_SERVICE # sshd binds port 22
+      - SYS_CHROOT       # sshd privilege separation (ChrootDirectory)
+      - AUDIT_WRITE      # sshd/PAM audit logging
+      - KILL             # sshd manages child processes
+
     # Strict security options
     security_opt:
       - no-new-privileges:true
@@ -200,6 +237,16 @@ services:
     # SSH access (set SSH_AUTHORIZED_KEYS to enable)
     ports:
       - "${SSH_PORT:-2222}:22"
+
+    # Read-only root filesystem (defense-in-depth)
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
+      - /run:size=10M
+      - /var/log:size=50M
+      - /etc/ssh:size=1M           # sshd host key generation at startup
+      - /home/cell:size=10M        # SSH keys, tmux config written by entrypoint
+      - /etc/profile.d:size=1M     # tmux env setup by entrypoint
 
     # Volumes (more restricted in secure mode)
     volumes:
@@ -240,6 +287,8 @@ services:
     container_name: dns-filter-2
     labels:
       - "cagent.log-collect=true"
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - ./configs/coredns:/etc/coredns
     command: ["-conf", "/etc/coredns/Corefile"]
@@ -266,6 +315,8 @@ services:
     container_name: dns-filter
     labels:
       - "cagent.log-collect=true"
+    security_opt:
+      - no-new-privileges:true
     # Scaling: to run >1 replica, remove container_name and static IPs, add a load balancer
     # deploy:
     #   replicas: ${DNS_FILTER_REPLICAS:-1}
@@ -308,6 +359,8 @@ services:
     container_name: http-proxy
     labels:
       - "cagent.log-collect=true"
+    security_opt:
+      - no-new-privileges:true
     # Scaling: to run >1 replica, remove container_name and static IPs, add a load balancer
     # deploy:
     #   replicas: ${HTTP_PROXY_REPLICAS:-1}
@@ -365,6 +418,8 @@ services:
     container_name: log-shipper
     profiles:
       - auditing
+    security_opt:
+      - no-new-privileges:true
 
     volumes:
       - ./configs/vector/vector.yaml:/etc/vector/vector.yaml:ro
@@ -425,6 +480,8 @@ services:
     container_name: warden
     labels:
       - "cagent.log-collect=true"
+    security_opt:
+      - no-new-privileges:true
     profiles:
       - managed
       - admin
@@ -492,6 +549,8 @@ services:
     container_name: log-store
     profiles:
       - auditing
+    security_opt:
+      - no-new-privileges:true
 
     environment:
       - ZO_ROOT_USER_EMAIL=${OPENOBSERVE_USER:-admin@cagent.local}
@@ -528,6 +587,8 @@ services:
     container_name: cloudflared
     profiles:
       - interactive
+    security_opt:
+      - no-new-privileges:true
 
     command: tunnel run
     environment:
@@ -559,6 +620,8 @@ services:
     container_name: email-proxy
     labels:
       - "cagent.log-collect=true"
+    security_opt:
+      - no-new-privileges:true
     profiles:
       - email
 
